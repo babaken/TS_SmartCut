@@ -87,11 +87,11 @@ jobs:
           python -m pip install -r requirements.txt "pytest>=8.0" "numpy>=1.26"
           python -m pip install ./native
       - name: Versions
-        shell: bash
+        shell: pwsh
         run: |
-          ffmpeg -hide_banner -version | head -1
-          command -v mpv > /dev/null || { echo "mpv is not on PATH:"; echo "$PATH" | tr ':' '\n'; exit 1; }
-          mpv --version | head -1
+          ffmpeg -hide_banner -version | Select-Object -First 1
+          (Get-Command mpv -ErrorAction Stop).Source
+          mpv --version | Select-Object -First 1
           python -c "import sys, PySide6, ts_smartcut_native as n; print(sys.version, PySide6.__version__, n.VERSION)"
 
       - name: Tests (Linux, X virtual display, Mesa's software OpenGL)
