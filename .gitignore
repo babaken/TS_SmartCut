@@ -1,0 +1,49 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+*.egg-info/
+
+# PyInstaller build output
+build/
+dist/
+
+# Keyframe cache / logs
+*.keyframes.json
+*.log
+
+# Local Claude Code settings
+.claude/
+/CLAUDE.md
+/CLAUDE.local.md
+
+# Old pre-pivot source snapshot (kept locally only)
+/TS_SmartCut/
+# Windows/macOS (core.ignorecase=true) also match the app package with the
+# rule above, silently ignoring new files under ts_smartcut/ — re-include it.
+!/ts_smartcut/
+
+# Recorded media used for local testing (never commit)
+/*.ts
+/*.m2ts
+/*.mp4
+/*.mkv
+/.realtest/
+
+# App temp folder (feature computation etc.)
+/Temp/
+
+# Keyframe cache (next to the executable / repo root)
+/KeyframeCache/
+/Logo/
+
+# Settings, auto-cut history and logs (next to the executable / repo root, design §31.9)
+/settings.json
+/recent_files.json
+/hardware_encoders.json
+/cut_history.db
+/cut_history.db-wal
+/cut_history.db-shm
+/cut_history*.db
+/logs/

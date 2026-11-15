@@ -1,0 +1,4 @@
+*.bat text eol=crlf
+# Shell scripts and desktop entries run on Linux: always LF, even in a Windows checkout
+*.sh text eol=lf
+*.desktop text eol=lf

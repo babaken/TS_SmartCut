@@ -1,0 +1,32 @@
+[project]
+name = "ts-smartcut"
+dynamic = ["version"]
+description = "Cross-platform desktop GUI for Smart Cut editing of TS/video recordings"
+requires-python = ">=3.10"
+dependencies = [
+    "PySide6>=6.7",
+]
+
+[project.optional-dependencies]
+# テストと確かめのツール (tools/) だけが numpy を使う (アプリは使わない。2026-10-30)
+dev = [
+    "pytest>=8.0",
+    "numpy>=1.26",
+]
+build = [
+    "pyinstaller>=6.0",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.dynamic]
+version = {attr = "ts_smartcut.__version__"}
+
+[tool.setuptools.packages.find]
+include = ["ts_smartcut*"]
+
+[tool.pytest.ini_options]
+# プロジェクト直下の旧ソースのコピー(TS_SmartCut/、git管理外)のテストを拾わないようにする
+testpaths = ["tests"]

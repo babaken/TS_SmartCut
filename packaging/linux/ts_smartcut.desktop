@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TS_SmartCut
+Comment=Cut commercials out of TV recordings (TS) by Smart Cut
+Comment[ja]=TV の録画（TS）から CM を Smart Cut で切り取る
+Exec="@DEST@/TS_SmartCut"
+Path=@DEST@
+Icon=@DEST@/_internal/ts_smartcut/gui/resources/icon.png
+Terminal=false
+Categories=AudioVideo;Video;AudioVideoEditing;
