@@ -8,7 +8,7 @@
 ## 1. 事前に用意するもの
 ============================================================
 1. **Python 3.10 以上**（公式インストーラ、"Add python.exe to PATH" を有効にする。3.14.7 で動作確認済み）
-2. **ffmpeg / ffprobe**（6 以降。公式ビルドを展開し、`ffmpeg.exe`/`ffprobe.exe` のあるフォルダを PATH に
+2. **ffmpeg / ffprobe**（8 以降。公式ビルドを展開し、`ffmpeg.exe`/`ffprobe.exe` のあるフォルダを PATH に
    追加する。chocolatey 等でも可）
 3. **mpv と libmpv（`libmpv-2.dll`）** — 下の「1.1 mpv の入れ方」の手順で入れる。
    アプリは `libmpv-2.dll`（または `mpv-2.dll`）を PATH（と実行ファイルの隣）から探して読み込むので、
