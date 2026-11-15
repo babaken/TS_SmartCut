@@ -2378,6 +2378,10 @@ class MainWindow(QMainWindow):
     def _check_encode_finished(self) -> None:
         if self.is_encoding():
             return
+        # 処理のスレッドから届いて溜まっている進捗を先に処理する。Qt はタイマーと
+        # スレッドからのシグナルの順を決めないので、これが無いと最後の進捗が操作を
+        # 戻した後に届き、プレビューを動かすことがあった(CI の Linux で見つけた、2026-11-16)。
+        QApplication.sendPostedEvents(None, QEvent.Type.MetaCall)
         self._encode_timer.stop()
         self._set_encoding_ui(False)
         item = self.encode_manager.items[0]

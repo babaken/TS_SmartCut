@@ -68,17 +68,18 @@ jobs:
         run: choco install ffmpeg -y --no-progress
       - name: mpv and libmpv (Windows)
         if: runner.os == 'Windows'
-        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          mkdir -p "$RUNNER_TEMP/libmpv"
-          cd "$RUNNER_TEMP/libmpv"
+          $dir = Join-Path $env:RUNNER_TEMP 'libmpv'
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Set-Location $dir
           # libmpv-2.dll for the preview and mpv.exe for the dependency check
           gh release download -R shinchiro/mpv-winbuild-cmake -p 'mpv-dev-x86_64-[0-9]*-git-*.7z' -p 'mpv-x86_64-[0-9]*-git-*.7z'
-          for f in *.7z; do 7z x -y "$f" > /dev/null; done
-          ls libmpv-2.dll mpv.exe
-          cygpath -w "$PWD" >> "$GITHUB_PATH"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          foreach ($f in Get-ChildItem *.7z) { 7z x -y $f.FullName | Out-Null; if ($LASTEXITCODE) { exit $LASTEXITCODE } }
+          Get-Item libmpv-2.dll, mpv.exe -ErrorAction Stop | Format-Table -AutoSize Name, Length
+          Add-Content -Path $env:GITHUB_PATH -Value $dir
 
       - name: Python packages and the Rust part (ts_smartcut_native)
         run: |
@@ -89,6 +90,7 @@ jobs:
         shell: bash
         run: |
           ffmpeg -hide_banner -version | head -1
+          command -v mpv > /dev/null || { echo "mpv is not on PATH:"; echo "$PATH" | tr ':' '\n'; exit 1; }
           mpv --version | head -1
           python -c "import sys, PySide6, ts_smartcut_native as n; print(sys.version, PySide6.__version__, n.VERSION)"
 

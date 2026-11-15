@@ -234,9 +234,10 @@ def test_finished_batch_shows_a_summary_instead_of_the_last_progress(qapp, batch
     view.add_item(_file_info("a"))
     view.add_item(_file_info("b"))
     view.start()
+    batch_manager.thread.join(timeout=5)
+    qapp.processEvents()  # 本当の進捗を先に届けてから、最後の進捗を差し替える
     view._on_progress(ProcessProgress(current_file=2, total_files=2, current_phase="Features",
                                       progress_percent=82.0, elapsed_time=847.0, estimated_remaining=0.0))
-    batch_manager.thread.join(timeout=5)
     view._refresh_list()
     assert view.progress_label.text().startswith("終了  完了 2 件・エラー 0 件・スキップ 0 件")
     assert "経過 0:14:07" in view.progress_label.text()
