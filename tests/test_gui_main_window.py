@@ -122,9 +122,10 @@ def test_file_info_line_shows_station_and_program(window, sample_video, qapp):
     assert "録画: 2026/09/30 21:59:56〜22:50:02" in tooltip
     assert "説明" in tooltip
     assert tooltip.endswith(base)  # 行は幅で切れるので、全文はツールチップで見られる
-    # 長い行でもウィンドウの幅を押し広げない
+    # 長い行でもウィンドウの幅を押し広げない(幅そのものは字体で変わるので、前と比べる)
+    width_before = window.minimumSizeHint().width()
     window.file_info_label.setText("x" * 2000)
-    assert window.minimumSizeHint().width() < 1200
+    assert window.minimumSizeHint().width() <= width_before
     window._show_file_info()
 
 

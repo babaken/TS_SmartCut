@@ -134,7 +134,8 @@ def write_sha256(path: Path) -> Path:
         for chunk in iter(lambda: f.read(1024 * 1024), b""):
             digest.update(chunk)
     sha_path = path.with_name(path.name + ".sha256")
-    sha_path.write_text(f"{digest.hexdigest()}  {path.name}\n", encoding="ascii")
+    # LF even on Windows: `sha256sum -c` on Linux reads a CRLF line's file name with the \r
+    sha_path.write_bytes(f"{digest.hexdigest()}  {path.name}\n".encode("ascii"))
     return sha_path
 
 

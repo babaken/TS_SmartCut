@@ -208,6 +208,9 @@ def test_windows_fingerprint_lists_display_adapters_quickly():
     start = time.perf_counter()
     fingerprint = hardware_fingerprint()
     assert time.perf_counter() - start < 0.5  # 起動のたびに呼ぶので軽いこと
+    if not gpu_module._windows_display_adapters():
+        # GitHub の Windows の仮想マシンは画面が PCI の機器ではない(2026-11-16)
+        pytest.skip("no PCI display adapter (virtual machine)")
     assert "PCI\\VEN_" in fingerprint
 
 

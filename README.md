@@ -39,7 +39,7 @@ How to use it: **[User Guide (docs/User_Guide.md)](docs/User_Guide.md)**.
 ## Requirements
 
 - Windows 10 / 11 (64-bit) or Linux (x86-64, glibc 2.39 or later: distributions of the Ubuntu 24.04 generation or newer)
-- **ffmpeg / ffprobe** (6 or later recommended) on PATH — not bundled
+- **ffmpeg / ffprobe 8 or later** on PATH — not bundled. Older versions misbehave: 7.x re-encodes interlaced H.264 as gray pictures, 6.x reports no progress for stream copy (Ubuntu 24.04's own package is 6.1; use a newer build there)
 - **mpv (libmpv)** for the preview — not bundled. Without it the app still starts and all cut editing works (only the preview is missing)
   - Windows: put `libmpv-2.dll` (or `mpv-2.dll`) in a folder on PATH
   - Linux: install your distribution's mpv / libmpv package
@@ -111,7 +111,7 @@ The pictures you see are the same, but re-encoded parts become hard-telecined 29
 | No preview sound, or sound from the wrong device | Choose the device in Settings → Preview → Audio output device |
 | [E302] Unsupported codec | The video is not MPEG-2 / H.264. Switch the batch item to Simple Copy (right-click) |
 | [E004] Not enough disk space | The output and temporary files need room (about twice the kept part on one drive). Free up space on that drive |
-| [E101] ffmpeg error | ffmpeg may be too old (6 or later recommended). See the log |
+| [E101] ffmpeg error | ffmpeg may be too old (8 or later is needed). See the log |
 | It won't start, with [E505] | The app's folder is not writable. Put it in a writable folder (the installers do) |
 | A `.ts_smartcut_temp` folder is left in the output folder | Left when the app ended during processing. It is removed the next time processing starts in that folder; you may delete it yourself |
 

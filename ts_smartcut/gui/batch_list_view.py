@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from PySide6.QtCore import QObject, Qt, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
@@ -423,6 +423,9 @@ class BatchListView(QWidget):
         if not self._was_running:
             return
         self._was_running = False
+        # 溜まっている進捗を先に処理する(後から届くと結果の表示を進捗で上書きする。
+        # Qt はタイマーとスレッドからのシグナルの順を決めない、2026-11-16)
+        QCoreApplication.sendPostedEvents(None, QEvent.Type.MetaCall)
         items = self.batch_manager.items
         counts = {status: sum(1 for item in items if item.status == status)
                   for status in (STATUS_DONE, STATUS_ERROR, STATUS_SKIPPED, STATUS_IDLE)}
