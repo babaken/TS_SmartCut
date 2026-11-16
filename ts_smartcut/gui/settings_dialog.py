@@ -131,6 +131,9 @@ class SettingsDialog(QDialog):
         self.output_pattern_edit.setToolTip(tr("settings.output_pattern_tip"))
         form.addRow(tr("settings.output_pattern"), self.output_pattern_edit)
 
+        self.output_dir_edit, output_dir_row = self._output_dir_row(self._settings.default_output_dir)
+        form.addRow(tr("settings.output_dir"), output_dir_row)
+
 
 
         return widget
@@ -193,6 +196,26 @@ class SettingsDialog(QDialog):
         self._update_encode_controls()
 
         return widget
+
+    def _output_dir_row(self, path):
+        """出力先のフォルダの欄と「参照」ボタン。空なら元の録画と同じフォルダ。"""
+        edit = QLineEdit(str(path) if path else "")
+        edit.setPlaceholderText(tr("settings.output_dir_default"))
+        button = QPushButton(tr("settings.template_browse"))
+
+        def browse() -> None:
+            name = QFileDialog.getExistingDirectory(self, tr("settings.output_dir_choose"), edit.text())
+            if name:
+                edit.setText(name)
+
+        button.clicked.connect(browse)
+        box = QHBoxLayout()
+        box.setContentsMargins(0, 0, 0, 0)
+        box.addWidget(edit, 1)
+        box.addWidget(button)
+        row = QWidget()
+        row.setLayout(box)
+        return edit, row
 
     def _template_row(self, path, file_filter: str):
         """テンプレートのファイルの欄と「参照」ボタン。空なら同梱の既定のテンプレート。"""
@@ -333,6 +356,12 @@ class SettingsDialog(QDialog):
             QMessageBox.warning(self, tr("settings.title"), error)
             self.output_pattern_edit.setFocus()
             return
+        # 無いフォルダの出力先も保存しない(処理の時に初めて気づくより早く知らせる)
+        output_dir = self.output_dir_edit.text().strip()
+        if output_dir and not Path(output_dir).is_dir():
+            QMessageBox.warning(self, tr("settings.title"), tr("settings.output_dir_missing", path=output_dir))
+            self.output_dir_edit.setFocus()
+            return
         # 誤ったテンプレート(読めない・置き換える文字が無い)も保存しない
         for output_format, edit in ((script_output.OUTPUT_AVS, self.avs_template_edit),
                                     (script_output.OUTPUT_VPY, self.vpy_template_edit)):
@@ -351,6 +380,8 @@ class SettingsDialog(QDialog):
         s = self._settings
         s.recent_files_count = self.recent_files_count_spin.value()
         s.output_filename_pattern = self.output_pattern_edit.text()
+        output_dir = self.output_dir_edit.text().strip()
+        s.default_output_dir = Path(output_dir) if output_dir else None
 
         s.audio_output_device = self.audio_device_combo.currentData()
         s.show_waveform = self.show_waveform_check.isChecked()

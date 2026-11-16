@@ -30,6 +30,7 @@ from typing import Callable, Dict, List, Optional, Union
 
 from ts_smartcut.i18n.language_manager import english, tr
 from ts_smartcut.system.child_processes import no_window
+from ts_smartcut.system.temp_file_manager import app_temp_dir
 
 CPU_ENCODER = "libx264"
 
@@ -295,7 +296,8 @@ def probe_interlaced_encoding(
     filters = ["tinterlace=interleave_top", "setfield=tff"]
     if hw_filter(encoder_name):
         filters.append(hw_filter(encoder_name))
-    with tempfile.TemporaryDirectory() as tmp:
+    # アプリの一時フォルダ(実行ファイルの横の Temp/)に書く。OS の一時フォルダは使わない(2026-11-16)
+    with tempfile.TemporaryDirectory(prefix="probe_", dir=app_temp_dir()) as tmp:
         out = Path(tmp) / "probe.ts"
         try:
             encode = subprocess.run(

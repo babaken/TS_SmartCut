@@ -114,7 +114,7 @@ Opening a broadcast recording (a TS with the EIT and TOT programme information) 
 
 ## 5. Output files
 
-- The output goes to the source recording's folder (shown in the output name dialog).
+- The output goes to "Output folder" in Settings → General; when it is empty (the default), to the source recording's folder (shown in the output name dialog).
 - The suggested file name comes from "Output file name pattern" in Settings → General (default `{name}_cut{ext}`): `{name}` (source name), `{ext}` (extension), `{date}` (processing date `YYYYMMDD`), `{time}` (processing time `HHMMSS`).
 - The extension is always the source's. A taken name gets a number such as `_001`; existing files are never overwritten, and neither is the source.
 - While processing, a `.ts_smartcut_temp` folder holds temporary files in the output folder (removed afterwards). The right end of the status bar shows the free space of the output folder.
@@ -125,7 +125,7 @@ Open with File → Settings.
 
 | Tab | Items |
 |---|---|
-| General | Number of recent files, output file name pattern |
+| General | Number of recent files, output file name pattern, output folder |
 | Preview | Audio output device, show / hide the waveform |
 | Encoding | Default processing mode, output format (TS / AVS / VPY) and templates, threads, the hardware encoder detection result and Detect again |
 | UI | Theme (light / dark / system), language (after a restart) |

@@ -52,3 +52,25 @@ def test_main_loads_settings_configures_logging_and_saves_on_exit(qapp, tmp_path
     windows_seen[0].deleteLater()
     qapp.processEvents()
     qapp.processEvents()
+
+
+def test_old_ffmpeg_is_reported_after_start(qapp, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox, QWidget
+
+    from tests._qt_helpers import pump_events
+    from ts_smartcut.models import AppSettings
+    from ts_smartcut.system.dependency_checker import DependencyChecker
+
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: shown.append((parent, text)))
+    monkeypatch.setattr(DependencyChecker, "old_ffmpeg_version", staticmethod(lambda path=None: "7.1.5"))
+    window = QWidget()
+    main_module._warn_if_old_ffmpeg(window, AppSettings())
+    assert pump_events(qapp, lambda: shown)
+    assert shown[0][0] is window and "7.1.5" in shown[0][1] and "8" in shown[0][1]
+
+    shown.clear()
+    monkeypatch.setattr(DependencyChecker, "old_ffmpeg_version", staticmethod(lambda path=None: None))
+    main_module._warn_if_old_ffmpeg(window, AppSettings())
+    assert not pump_events(qapp, lambda: shown, timeout_ms=500)
+    window.deleteLater()
