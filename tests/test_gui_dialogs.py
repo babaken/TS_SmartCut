@@ -158,6 +158,32 @@ def test_settings_dialog_rejects_invalid_filename_pattern(qapp, monkeypatch):
     assert dialog.get_settings().output_filename_pattern == "{name}_{date}{ext}"
 
 
+
+def test_settings_dialog_sets_and_clears_the_output_folder(qapp, tmp_path, monkeypatch):
+    warnings = []
+    monkeypatch.setattr("ts_smartcut.gui.settings_dialog.QMessageBox.warning",
+                        lambda parent, title, text: warnings.append(text))
+    dialog = SettingsDialog(AppSettings())
+    assert dialog.output_dir_edit.text() == ""  # 空欄 = 元の録画と同じフォルダ
+    # 無いフォルダは保存しない
+    missing = tmp_path / "missing"
+    dialog.output_dir_edit.setText(str(missing))
+    dialog.accept()
+    assert dialog.result() != dialog.DialogCode.Accepted and str(missing) in warnings[0]
+
+    dialog.output_dir_edit.setText(f"  {tmp_path}  ")
+    dialog.accept()
+    assert dialog.result() == dialog.DialogCode.Accepted
+    assert dialog.get_settings().default_output_dir == tmp_path
+    dialog.close()
+
+    dialog = SettingsDialog(AppSettings(default_output_dir=tmp_path))
+    assert dialog.output_dir_edit.text() == str(tmp_path)
+    dialog.output_dir_edit.setText("")
+    dialog.accept()
+    assert dialog.get_settings().default_output_dir is None
+    dialog.close()
+
 DEVICES = [("auto", "Autoselect device"), ("pulse/speaker", "スピーカー"), ("pulse/usb", "USBヘッドホン")]
 
 

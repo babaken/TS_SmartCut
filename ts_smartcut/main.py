@@ -121,6 +121,7 @@ def main() -> int:
     window = MainWindow(settings)
     window.show()
     _warn_if_native_missing(window)
+    _warn_if_old_ffmpeg(window, settings)
 
     exit_code = app.exec()
 
@@ -150,3 +151,35 @@ def _warn_if_native_missing(window) -> None:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+def _warn_if_old_ffmpeg(window, settings) -> None:
+    """ffmpeg が必要な版(8)より古ければ、起動の後に知らせる。版は裏で調べる(起動を待たせない)。
+    古くても動く所はあるので起動は止めない(2026-11-16、利用者の決定)。"""
+    from PySide6.QtCore import QObject, Signal
+    from PySide6.QtWidgets import QMessageBox
+
+    from ts_smartcut.i18n.language_manager import tr
+    from ts_smartcut.system.dependency_checker import MIN_FFMPEG_MAJOR, DependencyChecker
+
+    class _Bridge(QObject):
+        found = Signal(str)
+
+    bridge = _Bridge(window)  # 窓の子: GUI のスレッドで受け、窓と一緒に消える
+    bridge.found.connect(lambda version: QMessageBox.warning(
+        window, tr("messages.ffmpeg_old_title"),
+        tr("messages.ffmpeg_old", version=version, required=MIN_FFMPEG_MAJOR),
+    ))
+
+    def check() -> None:
+        version = DependencyChecker.old_ffmpeg_version(settings.ffmpeg_path)
+        if version is None:
+            return
+        logging.getLogger(LOGGER_NAME).warning(
+            "ffmpeg %s is older than the required %d; some processing may go wrong", version, MIN_FFMPEG_MAJOR)
+        try:
+            bridge.found.emit(version)
+        except RuntimeError:
+            pass  # 調べ終わる前に窓が閉じた
+
+    threading.Thread(target=check, daemon=True).start()

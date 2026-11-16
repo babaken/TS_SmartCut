@@ -23,6 +23,18 @@ _VERSION_PATTERNS: Dict[str, re.Pattern] = {
     "mpv": re.compile(r"mpv\s+v?(\S+)"),
 }
 
+# 必要な ffmpeg の版(README・資料と同じ)。7.x はインターレースの H.264 をビットレート指定で
+# 再エンコードすると灰色の絵になり、6.x はストリームのコピーで進み具合を出さない(2026-11-15)
+MIN_FFMPEG_MAJOR = 8
+# "n8.1.3-35-g…"(BtbN)、"9.0.2-essentials_build-…"(gyan.dev)、"7:6.1.1-3ubuntu5"(Debian の epoch 付き)など
+_FFMPEG_MAJOR = re.compile(r"^(?:\d+:)?n?(\d+)\.\d")
+
+
+def ffmpeg_major_version(version: str) -> Optional[int]:
+    """get_versions() の ffmpeg の版から主の番号を取る。開発版("N-12345-g…")など読めない時は None。"""
+    match = _FFMPEG_MAJOR.match(version)
+    return int(match.group(1)) if match else None
+
 
 class DependencyChecker:
     @staticmethod
@@ -84,3 +96,13 @@ class DependencyChecker:
             match = _VERSION_PATTERNS[tool].search(output)
             versions[tool] = match.group(1) if match else "Unknown"
         return versions
+
+    @staticmethod
+    def old_ffmpeg_version(ffmpeg_path: Optional[Union[str, Path]] = None) -> Optional[str]:
+        """ffmpeg が MIN_FFMPEG_MAJOR より古ければその版を返す(新しい・見つからない・読めない時は None)。"""
+        output = DependencyChecker._run_version(ffmpeg_path or "ffmpeg", _VERSION_ARGS["ffmpeg"])
+        match = _VERSION_PATTERNS["ffmpeg"].search(output or "")
+        if not match:
+            return None
+        major = ffmpeg_major_version(match.group(1))
+        return match.group(1) if major is not None and major < MIN_FFMPEG_MAJOR else None

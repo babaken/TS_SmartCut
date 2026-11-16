@@ -39,7 +39,7 @@ How to use it: **[User Guide (docs/User_Guide.md)](docs/User_Guide.md)**.
 ## Requirements
 
 - Windows 10 / 11 (64-bit) or Linux (x86-64, glibc 2.39 or later: distributions of the Ubuntu 24.04 generation or newer)
-- **ffmpeg / ffprobe 8 or later** on PATH — not bundled. Older versions misbehave: 7.x re-encodes interlaced H.264 as gray pictures, 6.x reports no progress for stream copy (Ubuntu 24.04's own package is 6.1; use a newer build there)
+- **ffmpeg / ffprobe 8 or later** on PATH — not bundled. Older versions misbehave: 7.x re-encodes interlaced H.264 as gray pictures, 6.x reports no progress for stream copy (Ubuntu 24.04's own package is 6.1; use a newer build there). The app warns at startup when ffmpeg is older
 - **mpv (libmpv)** for the preview — not bundled. Without it the app still starts and all cut editing works (only the preview is missing)
   - Windows: put `libmpv-2.dll` (or `mpv-2.dll`) in a folder on PATH
   - Linux: install your distribution's mpv / libmpv package
