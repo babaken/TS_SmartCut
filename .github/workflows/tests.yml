@@ -1,8 +1,7 @@
 name: tests
 
-# Public repository: runs on pushes to main and on PRs.
-# Private development repository (TS_SmartCut-dev): runs only on PRs and by hand, to save the private
-# repository's free minutes (pushes don't start it there).
+# Runs only in the public repository (pushes to main, PRs and by hand). The private development
+# repository (TS_SmartCut-dev) is checked locally: its Actions minutes are not used.
 on:
   push:
     branches: [main]
@@ -15,7 +14,7 @@ permissions:
 
 jobs:
   gitleaks:
-    if: github.event_name != 'push' || github.repository == 'babaken/TS_SmartCut'
+    if: github.repository == 'babaken/TS_SmartCut'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -29,7 +28,7 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   tests:
-    if: github.event_name != 'push' || github.repository == 'babaken/TS_SmartCut'
+    if: github.repository == 'babaken/TS_SmartCut'
     strategy:
       fail-fast: false
       matrix:
