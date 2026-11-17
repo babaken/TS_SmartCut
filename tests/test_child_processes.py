@@ -68,7 +68,8 @@ def _running_on_linux(pid: int) -> bool:
     try:
         with open(f"/proc/{pid}/stat") as f:
             return f.read().rsplit(")", 1)[1].split()[0] != "Z"
-    except FileNotFoundError:
+    except (FileNotFoundError, ProcessLookupError):
+        # 開いてから読むまでの間に終わると、読む所で ProcessLookupError になる(WSL で 30 回に 2 回、2026-11-18)
         return False
 
 

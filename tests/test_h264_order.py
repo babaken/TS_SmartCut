@@ -77,9 +77,10 @@ def test_copied_part_continues_the_previous_part(native, tmp_path):
     width, before = _poc_lsbs(original)
     max_lsb = 1 << width
 
-    added = native.h264_continue_order(str(part), 3, 0)
+    added, broken = native.h264_continue_order(str(part), 3, 0)
 
     assert added is not None
+    assert broken == 0
     # 部分の中の絵は同じにデコードされる(POC どうしの差は変わらない)
     assert _frame_hashes(part) == _frame_hashes(original)
     width_after, after = _poc_lsbs(part)
@@ -111,7 +112,7 @@ def test_part_starting_with_an_idr_is_left_alone(native, tmp_path):
     source = _source(tmp_path / "closed.ts", "scenecut=0")  # キーフレームはすべて IDR
     part = _copy_from_keyframe(source, tmp_path / "part.ts", 1)
     data = part.read_bytes()
-    assert native.h264_continue_order(str(part), 3, 0) is None
+    assert native.h264_continue_order(str(part), 3, 0) == (None, 0)
     assert part.read_bytes() == data
 
 
@@ -123,3 +124,58 @@ def test_non_h264_part_is_refused(native, tmp_path):
     )
     with pytest.raises(ValueError, match="no H.264 video"):
         native.h264_tail_order(str(source))
+
+
+def test_tail_order_reads_back_to_the_parameter_sets(native, tmp_path):
+    # 前の部分は終わりの 4 MiB だけを読む。SPS・PPS が先頭にしか無い (キーフレームが 1 つだけの) 大きな部分では、
+    # 読む所を前へ広げて最後の参照の絵を見つける
+    source = tmp_path / "long.ts"
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", "testsrc2=size=320x240:rate=60000/1001",
+         "-vf", "noise=alls=60:allf=t,tinterlace=interleave_top,setfield=tff", "-frames:v", "150",
+         "-c:v", "libx264", "-flags", "+ilme+ildct", "-bf", "0", "-qp", "0", "-preset", "ultrafast",
+         "-x264-params", "keyint=infinite:scenecut=0", str(source)],
+        check=True, capture_output=True,
+    )
+    assert source.stat().st_size > 8 << 20
+    assert source.read_bytes().count(bytes([0, 0, 1, 0x67])) == 1  # SPS (NAL 7) は先頭の 1 つだけ
+    width, lsbs = _poc_lsbs(source)
+    assert native.h264_tail_order(str(source)) == (width, lsbs[-1], 0)
+
+
+def _break_a_slice_header(path, which):
+    """which 番目のスライス (NAL 1) の見出しを、読めない Exp-Golomb (0 が 32 個より多い) にする。"""
+    data = bytearray(path.read_bytes())
+    found = [m.start() + 3 for m in re.finditer(rb"\x00\x00\x01[\x01\x21\x41\x61]", bytes(data))
+             if (m.start() + 3) % 188 + 13 < 188]
+    pos = found[which]
+    data[pos + 1:pos + 13] = bytes([0, 0, 3]) * 4
+    path.write_bytes(bytes(data))
+
+
+def test_unreadable_slices_are_left_as_they_are(native, tmp_path):
+    # 受信エラーで壊れた見出しのスライスは飛ばして数え、ほかのスライスは書き換える
+    source = _source(tmp_path / "open.ts", "open-gop=1:scenecut=0")
+    part = _copy_from_keyframe(source, tmp_path / "part.ts", 2)
+    _break_a_slice_header(part, 4)
+
+    added, broken = native.h264_continue_order(str(part), 3, 0)
+
+    assert added is not None
+    assert broken == 1
+
+
+class _Set:
+    def is_set(self):
+        return True
+
+
+def test_cancel_stops_without_changing_the_part(native, tmp_path):
+    source = _source(tmp_path / "open.ts", "open-gop=1:scenecut=0")
+    part = _copy_from_keyframe(source, tmp_path / "part.ts", 2)
+    data = part.read_bytes()
+    with pytest.raises(ValueError, match="cancelled"):
+        native.h264_continue_order(str(part), 3, 0, cancel=_Set())
+    with pytest.raises(ValueError, match="cancelled"):
+        native.h264_tail_order(str(part), cancel=_Set())
+    assert part.read_bytes() == data

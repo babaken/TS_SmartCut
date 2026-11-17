@@ -19,7 +19,7 @@ from ts_smartcut.errors import SystemResourceError
 # 特徴の計算 post.rs。どれも 2026-10-28。6: ロゴの型どうしの計算と .lgd の型・ロゴを求める計算 logo.rs、2026-10-30。
 # 7: 学習のモデル gbdt.rs (LightGBM の代わり)、2026-10-30。8: フレームごとの一致度の並べ替え frame_scores (numpy を
 # やめる)、2026-10-30)
-NATIVE_VERSION = 10
+NATIVE_VERSION = 11
 
 
 class NativeModuleError(SystemResourceError):

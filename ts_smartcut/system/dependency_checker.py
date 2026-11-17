@@ -137,10 +137,12 @@ class DependencyChecker:
         """ffmpeg のビルドを表す文字: 版と、ビルドの構成(configuration の行)の短いハッシュ。
         同じ版でも配布元が違えば入っている部品(GPU の部品など)が違うので、両方で見分ける。
         GPU の判定に控え、変わったら判定し直す(2026-11-17、利用者の決定)。"""
+        # 版も同じ出力から読む(ffmpeg_version を呼ぶと、読めない時にもう一度 ffmpeg を動かして待つ)
         output = DependencyChecker.ffmpeg_version_output(ffmpeg_path)
-        version = DependencyChecker.ffmpeg_version(ffmpeg_path)
-        if output is None or version is None:
+        match = _VERSION_PATTERNS["ffmpeg"].search(output or "")
+        if output is None or match is None:
             return None
+        version = match.group(1)
         configuration = _FFMPEG_CONFIGURATION.search(output)
         digest = hashlib.sha1((configuration.group(0) if configuration else "").encode("utf-8")).hexdigest()[:12]
         return f"{version} ({digest})"

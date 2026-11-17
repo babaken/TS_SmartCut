@@ -160,6 +160,15 @@ fn skip_scaling_list(r: &mut Reader, size: usize) -> Result<(), Fail> {
     Ok(())
 }
 
+/// SPS の log2_max_*_minus4 から幅 (規格では 0〜12 なので 4〜16 ビット)。外れた値の幅でビットをずらすと
+/// あふれる (細工したファイル、2026-11-17 のセキュリティ診断)
+fn width_of(minus4: u32, name: &str) -> Result<usize, Fail> {
+    if minus4 > 12 {
+        return Err(format!("H.264 SPS has a {name} width out of range ({})", minus4 as u64 + 4));
+    }
+    Ok(minus4 as usize + 4)
+}
+
 fn parse_sps(rbsp: &[u8]) -> Result<(u32, Sps), Fail> {
     let mut r = Reader { data: rbsp, pos: 8 };
     let profile = r.u(8)?;
@@ -182,11 +191,11 @@ fn parse_sps(rbsp: &[u8]) -> Result<(u32, Sps), Fail> {
             }
         }
     }
-    let log2_max_frame_num = r.ue()? as usize + 4;
+    let log2_max_frame_num = width_of(r.ue()?, "frame_num")?;
     let poc_type = r.ue()?;
     let mut log2_max_poc_lsb = 0;
     if poc_type == 0 {
-        log2_max_poc_lsb = r.ue()? as usize + 4;
+        log2_max_poc_lsb = width_of(r.ue()?, "pic_order_cnt_lsb")?;
     } else if poc_type == 1 {
         r.u(1)?;
         r.se()?;
@@ -275,175 +284,323 @@ fn poc_msb(lsb: u32, prev_lsb: u32, prev_msb: i64, max_lsb: u32) -> i64 {
 
 // ---- TS の映像のスライス ------------------------------------------------------------------------
 
-/// TS の中の 1 つのスライスの見出し (NAL の先頭 WINDOW_BYTES バイトまで) とファイルの位置
-struct TsSlice {
-    slice: Slice,
-    /// NAL の先頭からの、エミュレーション防止バイトの付いたバイトと、それぞれのファイルの位置
-    escaped: Vec<u8>,
-    offsets: Vec<u64>,
+/// 一度に読むバイト数。読むごとに中止を確かめる
+const CHUNK_BYTES: usize = 4 << 20;
+/// 前の部分は終わりのこれだけを読む。最後の参照の絵が見つからなければ (SPS・PPS がもっと前にある等)、倍ずつ前へ広げる
+const TAIL_BYTES: u64 = 4 << 20;
+/// 1 つの PES の上限。超えたら壊れた PES として捨てる (組み立て中は ES のバイトごとにファイルの位置も持つ)
+const MAX_PES_BYTES: usize = 32 << 20;
+/// 中止した時のエラーの文 (Python は cancel_event を見て中止として扱う)
+const CANCELLED: &str = "cancelled";
+
+/// 中止の印 (Python の threading.Event)。読むごとに is_set を確かめる
+struct Cancel(Option<Py<PyAny>>);
+
+impl Cancel {
+    fn check(&self) -> Result<(), Fail> {
+        if let Some(event) = &self.0 {
+            let set = Python::attach(|py| event.call_method0(py, "is_set").and_then(|v| v.extract::<bool>(py)))
+                .unwrap_or(false);
+            if set {
+                return Err(CANCELLED.into());
+            }
+        }
+        Ok(())
+    }
 }
 
-/// TS の映像 (H.264) の PES を 1 つずつ組み立て、SPS・PPS を読み、スライスを順に callback へ渡す。
-/// callback が false を返したらやめる
-fn each_slice(file: &mut File, mut callback: impl FnMut(TsSlice) -> bool) -> Result<(), Fail> {
-    let mut data = Vec::new();
-    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
-    file.read_to_end(&mut data).map_err(|e| e.to_string())?;
-    let (packet_size, start) = ts::detect_packet_size(&data).ok_or("not a TS file")?;
-    let offset = packet_size - TS_PACKET_SIZE;
+/// TS の中の 1 つのスライスの見出しと、書き換えに要るバイトのファイルの位置
+struct TsSlice {
+    slice: Slice,
+    /// NAL の先頭から、下位の値の後ろ WINDOW_MARGIN_BITS までを含む短い範囲 (エミュレーション防止バイト付き)。
+    /// 部分の終わりまで IDR が無いと全部のスライスを覚えるので短くする (2 時間で約 43 万スライス)
+    escaped: Vec<u8>,
+    /// escaped のバイトのファイルの位置 (続いている範囲ごとに (位置, 長さ)。TS のパケットの境目で分かれる)
+    runs: Vec<(u64, u32)>,
+}
 
-    let mut pat = SectionAssembler::default();
-    let mut pmt_pid: Option<u16> = None;
-    let mut pmt = SectionAssembler::default();
-    let mut video_pid: Option<u16> = None;
-    let mut params = Parameters::default();
-    // 組み立て中の PES の ES (バイト, ファイルの位置)
-    let mut es: Vec<u8> = Vec::new();
-    let mut positions: Vec<u64> = Vec::new();
-    let mut in_pes = false;
+/// 読み終わりの様子
+#[derive(Default)]
+struct Scan {
+    /// H.264 の映像があった
+    video: bool,
+    /// 読めずに飛ばしたスライス・SPS・PPS・PES の数 (受信エラーなど)
+    broken: usize,
+}
 
-    let mut flush = |es: &[u8], positions: &[u64], params: &mut Parameters| -> Result<bool, Fail> {
+/// 窓の終わり end を、00・エミュレーション防止の 03 の直後・その手前に来ないよう後ろへ延ばす
+/// (作り直すと、窓の外のバイトとの間の 03 の付き方が変わる)
+fn safe_end(es: &[u8], s: usize, e: usize, mut end: usize) -> usize {
+    while end < e && (es[end - 1] == 0 || es[end] == 3 || (end >= s + 3 && es[end - 3..end] == [0, 0, 3])) {
+        end += 1;
+    }
+    end
+}
+
+/// NAL es[s..e] の先頭から RBSP の need_bits ビットを含む最短の範囲の終わり (safe_end 付き)。NAL が短ければ None
+fn rewrite_end(es: &[u8], s: usize, e: usize, need_bits: usize) -> Option<usize> {
+    let (mut zeros, mut bytes, mut i) = (0, 0usize, s);
+    while i < e && bytes * 8 < need_bits {
+        let b = es[i];
+        i += 1;
+        if zeros >= 2 && b == 3 {
+            zeros = 0;
+            continue;
+        }
+        bytes += 1;
+        zeros = if b == 0 { zeros + 1 } else { 0 };
+    }
+    if bytes * 8 < need_bits {
+        return None;
+    }
+    Some(safe_end(es, s, e, i))
+}
+
+/// 位置の並びを、続いている範囲ごとの (位置, 長さ) にする
+fn runs_of(positions: &[u64]) -> Vec<(u64, u32)> {
+    let mut runs: Vec<(u64, u32)> = Vec::new();
+    for &p in positions {
+        match runs.last_mut() {
+            Some((start, len)) if *start + *len as u64 == p => *len += 1,
+            _ => runs.push((p, 1)),
+        }
+    }
+    runs
+}
+
+/// PES を組み立てて SPS・PPS・スライスを読む
+#[derive(Default)]
+struct Assembler {
+    params: Parameters,
+    /// 組み立て中の PES の ES (バイト, ファイルの位置)
+    es: Vec<u8>,
+    positions: Vec<u64>,
+    in_pes: bool,
+    broken: usize,
+}
+
+impl Assembler {
+    /// 組み立てた PES の NAL を読む。読めない SPS・PPS・スライスは飛ばして数える。callback が false ならやめる
+    fn flush(&mut self, callback: &mut impl FnMut(TsSlice) -> bool) -> bool {
+        let es = &self.es;
         for (s, e) in split_nal_units(es) {
             let nal_type = es[s] & 0x1F;
             match nal_type {
-                NAL_SPS | NAL_PPS => params.read(nal_type, &unescape(&es[s..e]))?,
-                NAL_SLICE | NAL_IDR => {
-                    let end = (s + WINDOW_BYTES).min(e);
-                    let mut window_end = end;
-                    // 窓の終わりが 00・エミュレーション防止の 03 の直後・その手前に来ないようにする
-                    // (作り直すと、窓の外のバイトとの間の 03 の付き方が変わる)
-                    while window_end < e
-                        && (es[window_end - 1] == 0
-                            || es[window_end] == 3
-                            || (window_end >= s + 3 && es[window_end - 3..window_end] == [0, 0, 3]))
-                    {
-                        window_end += 1;
+                NAL_SPS | NAL_PPS => {
+                    if self.params.read(nal_type, &unescape(&es[s..e])).is_err() {
+                        self.broken += 1;
                     }
-                    let escaped = es[s..window_end].to_vec();
-                    let slice = parse_slice(&unescape(&escaped), params)?;
-                    let ts_slice = TsSlice { slice, escaped, offsets: positions[s..window_end].to_vec() };
+                }
+                NAL_SLICE | NAL_IDR => {
+                    let window_end = safe_end(es, s, e, (s + WINDOW_BYTES).min(e));
+                    let Ok(slice) = parse_slice(&unescape(&es[s..window_end]), &self.params) else {
+                        self.broken += 1;
+                        continue;
+                    };
+                    let need = slice.lsb_pos + slice.width + WINDOW_MARGIN_BITS;
+                    // 見出しが窓より長い時は窓のまま (書き換えの時に「長すぎる」として断る)
+                    let end = rewrite_end(es, s, e, need).unwrap_or(window_end);
+                    let ts_slice =
+                        TsSlice { slice, escaped: es[s..end].to_vec(), runs: runs_of(&self.positions[s..end]) };
                     if !callback(ts_slice) {
-                        return Ok(false);
+                        return false;
                     }
                 }
                 _ => {}
             }
         }
-        Ok(true)
-    };
+        true
+    }
+}
 
-    let mut pos = start;
-    while pos + packet_size <= data.len() {
-        let p = &data[pos + offset..pos + packet_size];
-        let file_pos = (pos + offset) as u64;
-        pos += packet_size;
-        if p[0] != ts::SYNC_BYTE {
-            return Err("lost TS sync in a part file".into());
+/// (パケットの大きさ, 最初のパケットの位置, ファイルの大きさ)
+fn packet_layout(file: &mut File) -> Result<(usize, u64, u64), Fail> {
+    let size = file.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+    let mut head = vec![0u8; size.min(64 * 1024) as usize];
+    file.seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+    file.read_exact(&mut head).map_err(|e| e.to_string())?;
+    let (packet_size, start) = ts::detect_packet_size(&head).ok_or("not a TS file")?;
+    Ok((packet_size, start as u64, size))
+}
+
+/// ファイルの from (パケットの始まり) から終わりまで、TS の映像 (H.264) の PES を 1 つずつ組み立て、SPS・PPS を読み、
+/// スライスを順に callback へ渡す。callback が false を返したらやめる。CHUNK_BYTES ずつ読み、読むごとに中止を確かめる。
+/// 途中から読み始めた時は、PAT・PMT・PES の始まり・SPS・PPS が来るまでのものは数えずに飛ばす
+fn each_slice(
+    file: &mut File,
+    packet_size: usize,
+    from: u64,
+    cancel: &Cancel,
+    mut callback: impl FnMut(TsSlice) -> bool,
+) -> Result<Scan, Fail> {
+    let offset = packet_size - TS_PACKET_SIZE;
+    let mut pat = SectionAssembler::default();
+    let mut pmt_pid: Option<u16> = None;
+    let mut pmt = SectionAssembler::default();
+    let mut video_pid: Option<u16> = None;
+    let mut asm = Assembler::default();
+
+    file.seek(SeekFrom::Start(from)).map_err(|e| e.to_string())?;
+    let mut buf: Vec<u8> = Vec::with_capacity(CHUNK_BYTES + packet_size);
+    let mut buf_pos = from; // buf[0] のファイルの位置
+    loop {
+        cancel.check()?;
+        let old = buf.len();
+        buf.resize(old + CHUNK_BYTES, 0);
+        let mut filled = old;
+        while filled < buf.len() {
+            let n = file.read(&mut buf[filled..]).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            filled += n;
         }
-        let pid = (((p[1] & 0x1F) as u16) << 8) | p[2] as u16;
-        if pid == 0 {
-            for section in pat.feed(p) {
-                if let Some(&(_, pmt)) = ts::parse_pat(&section).first() {
-                    pmt_pid = Some(pmt);
+        buf.truncate(filled);
+        let whole = buf.len() / packet_size * packet_size;
+        if whole == 0 {
+            break;
+        }
+        for start in (0..whole).step_by(packet_size) {
+            let p = &buf[start + offset..start + packet_size];
+            let file_pos = buf_pos + (start + offset) as u64;
+            if p[0] != ts::SYNC_BYTE {
+                return Err("lost TS sync in a part file".into());
+            }
+            let pid = (((p[1] & 0x1F) as u16) << 8) | p[2] as u16;
+            if pid == 0 {
+                for section in pat.feed(p) {
+                    if let Some(&(_, pmt)) = ts::parse_pat(&section).first() {
+                        pmt_pid = Some(pmt);
+                    }
                 }
-            }
-            continue;
-        }
-        if Some(pid) == pmt_pid && video_pid.is_none() {
-            for section in pmt.feed(p) {
-                let (_, _, streams) = ts::parse_pmt(&section).map_err(|_| "broken PMT")?;
-                video_pid = streams.iter().find(|s| s.1 == 0x1B).map(|s| s.0);
-            }
-            continue;
-        }
-        if Some(pid) != video_pid {
-            continue;
-        }
-        let afc = (p[3] >> 4) & 0x03;
-        if afc & 0x01 == 0 {
-            continue;
-        }
-        let mut payload = 4;
-        if afc == 0x03 {
-            payload += 1 + p[4] as usize;
-        }
-        if payload >= TS_PACKET_SIZE {
-            continue;
-        }
-        if p[1] & 0x40 != 0 {
-            if in_pes && !flush(&es, &positions, &mut params)? {
-                return Ok(());
-            }
-            es.clear();
-            positions.clear();
-            // PES の見出し (00 00 01 stream_id, 長さ, 2 バイトのフラグ, 見出しの長さ)
-            if payload + 9 > TS_PACKET_SIZE || p[payload..payload + 3] != [0, 0, 1] {
-                in_pes = false;
                 continue;
             }
-            payload += 9 + p[payload + 8] as usize;
-            in_pes = true;
+            if Some(pid) == pmt_pid && video_pid.is_none() {
+                for section in pmt.feed(p) {
+                    let (_, _, streams) = ts::parse_pmt(&section).map_err(|_| "broken PMT")?;
+                    video_pid = streams.iter().find(|s| s.1 == 0x1B).map(|s| s.0);
+                }
+                continue;
+            }
+            if Some(pid) != video_pid {
+                continue;
+            }
+            let afc = (p[3] >> 4) & 0x03;
+            if afc & 0x01 == 0 {
+                continue;
+            }
+            let mut payload = 4;
+            if afc == 0x03 {
+                payload += 1 + p[4] as usize;
+            }
+            if payload >= TS_PACKET_SIZE {
+                continue;
+            }
+            if p[1] & 0x40 != 0 {
+                if asm.in_pes && !asm.flush(&mut callback) {
+                    return Ok(Scan { video: true, broken: asm.broken });
+                }
+                asm.es.clear();
+                asm.positions.clear();
+                // PES の見出し (00 00 01 stream_id, 長さ, 2 バイトのフラグ, 見出しの長さ)
+                if payload + 9 > TS_PACKET_SIZE || p[payload..payload + 3] != [0, 0, 1] {
+                    asm.in_pes = false;
+                    continue;
+                }
+                payload += 9 + p[payload + 8] as usize;
+                asm.in_pes = true;
+            }
+            if asm.in_pes && payload < TS_PACKET_SIZE {
+                if asm.es.len() + TS_PACKET_SIZE > MAX_PES_BYTES {
+                    // 終わらない PES (壊れた TS)。メモリを使い切らないよう捨てる
+                    asm.broken += 1;
+                    asm.in_pes = false;
+                    asm.es.clear();
+                    asm.positions.clear();
+                    continue;
+                }
+                asm.es.extend_from_slice(&p[payload..]);
+                asm.positions.extend((payload..TS_PACKET_SIZE).map(|k| file_pos + k as u64));
+            }
         }
-        if in_pes && payload < TS_PACKET_SIZE {
-            es.extend_from_slice(&p[payload..]);
-            positions.extend((payload..TS_PACKET_SIZE).map(|k| file_pos + k as u64));
-        }
+        buf.drain(..whole);
+        buf_pos += whole as u64;
     }
-    if in_pes {
-        flush(&es, &positions, &mut params)?;
+    if asm.in_pes {
+        asm.flush(&mut callback);
     }
-    if video_pid.is_none() {
-        return Err("no H.264 video in the part file".into());
-    }
-    Ok(())
+    Ok(Scan { video: video_pid.is_some(), broken: asm.broken })
 }
 
 /// 部分ファイルの最後の参照の絵の (下位の幅, 下位の値, 表示がそれより後になる絵の POC の差の最大)。
-/// POC の方式 0 でなければ None
-fn tail_order(path: &str) -> Result<Option<(usize, u32, i64)>, Fail> {
+/// POC の方式 0 でなければ None。終わりの TAIL_BYTES だけを読み、見つからなければ倍ずつ前へ広げる
+fn tail_order(path: &str, cancel: &Cancel) -> Result<Option<(usize, u32, i64)>, Fail> {
     let mut file = File::open(path).map_err(|e| e.to_string())?;
-    let (mut prev_lsb, mut prev_msb) = (0u32, 0i64);
-    let mut last_ref: Option<(usize, u32, i64)> = None; // (幅, 下位, POC)
-    let mut max_poc = i64::MIN;
-    let mut bad = false;
-    each_slice(&mut file, |s| {
-        let slice = s.slice;
-        if slice.first_mb != 0 {
-            return true;
+    let (packet_size, first, size) = packet_layout(&mut file)?;
+    let mut back = TAIL_BYTES;
+    loop {
+        let from = if size <= first + back {
+            first
+        } else {
+            first + (size - back - first) / packet_size as u64 * packet_size as u64
+        };
+        // POC の上位は読み始めの絵を 0 として数える (差だけを使うので、どこから読んでも同じ)
+        let mut prev: Option<(u32, i64)> = None; // (下位, 上位)
+        let mut last_ref: Option<(usize, u32, i64)> = None; // (幅, 下位, POC)
+        let mut max_poc = i64::MIN;
+        let mut bad = false;
+        let scan = each_slice(&mut file, packet_size, from, cancel, |s| {
+            let slice = s.slice;
+            if slice.first_mb != 0 {
+                return true;
+            }
+            if slice.poc_type != 0 {
+                bad = true;
+                return false;
+            }
+            if slice.idr {
+                prev = None;
+                last_ref = None;
+                max_poc = i64::MIN;
+            }
+            let (prev_lsb, prev_msb) = prev.unwrap_or((slice.lsb, 0));
+            let msb = poc_msb(slice.lsb, prev_lsb, prev_msb, 1 << slice.width);
+            let poc = msb + slice.lsb as i64;
+            max_poc = max_poc.max(poc);
+            if slice.ref_idc != 0 {
+                prev = Some((slice.lsb, msb));
+                last_ref = Some((slice.width, slice.lsb, poc));
+            } else if prev.is_none() {
+                prev = Some((slice.lsb, msb));
+            }
+            true
+        })?;
+        if bad {
+            return Ok(None);
         }
-        if slice.poc_type != 0 {
-            bad = true;
-            return false;
+        if let Some((width, lsb, poc)) = last_ref {
+            return Ok(Some((width, lsb, max_poc - poc)));
         }
-        if slice.idr {
-            prev_lsb = 0;
-            prev_msb = 0;
-            last_ref = None;
-            max_poc = i64::MIN;
+        if from == first {
+            if !scan.video {
+                return Err("no H.264 video in the part file".into());
+            }
+            return Ok(None);
         }
-        let msb = poc_msb(slice.lsb, prev_lsb, prev_msb, 1 << slice.width);
-        let poc = msb + slice.lsb as i64;
-        max_poc = max_poc.max(poc);
-        if slice.ref_idc != 0 {
-            prev_lsb = slice.lsb;
-            prev_msb = msb;
-            last_ref = Some((slice.width, slice.lsb, poc));
-        }
-        true
-    })?;
-    if bad {
-        return Ok(None);
+        back = back.saturating_mul(2);
     }
-    Ok(last_ref.map(|(width, lsb, poc)| (width, lsb, max_poc - poc)))
 }
 
 /// 部分ファイルの最初の IDR までのスライスの下位に、前の部分に続く値を足す (その場で書き換える)。
-/// 足した値を返す。最初の絵が IDR・POC の方式 0 でない時は何もしないで None
-fn shift_order(path: &str, prev_lsb: u32, ahead: i64) -> Result<Option<u32>, Fail> {
+/// (足した値, 読めずに飛ばしたスライスなどの数) を返す。最初の絵が IDR・POC の方式 0 でない時は足した値が None。
+/// 読めないスライスは書き換えずに残す (受信エラーで壊れた所。もともとデコードできない)。
+/// ファイルに書くのは全部を読み終わって値が決まった後なので、途中で中止してもファイルは変わらない
+fn shift_order(path: &str, prev_lsb: u32, ahead: i64, cancel: &Cancel) -> Result<(Option<u32>, usize), Fail> {
     let mut file = OpenOptions::new().read(true).write(true).open(path).map_err(|e| e.to_string())?;
+    let (packet_size, first_packet, _) = packet_layout(&mut file)?;
     let mut slices: Vec<TsSlice> = Vec::new();
     let mut stop = false;
-    each_slice(&mut file, |s| {
+    let scan = each_slice(&mut file, packet_size, first_packet, cancel, |s| {
         if s.slice.idr && s.slice.first_mb == 0 && !slices.is_empty() {
             return false; // ここから POC は 0 からになる
         }
@@ -458,8 +615,11 @@ fn shift_order(path: &str, prev_lsb: u32, ahead: i64) -> Result<Option<u32>, Fai
         slices.push(s);
         true
     })?;
+    if !scan.video {
+        return Err("no H.264 video in the part file".into());
+    }
     if stop || slices.is_empty() {
-        return Ok(None);
+        return Ok((None, scan.broken));
     }
     let width = slices[0].slice.width;
     if slices.iter().any(|s| s.slice.width != width) {
@@ -477,56 +637,75 @@ fn shift_order(path: &str, prev_lsb: u32, ahead: i64) -> Result<Option<u32>, Fai
     // 3 枚が元と違う絵になった (間が 2 の時。10 以上で一致、2026-11-17 実録画)
     let start = (lowest + ORDER_GAP).min(max_lsb / 2);
     let candidates = (start..=max_lsb / 2).chain(lowest..start);
-    // そのまま作り直して同じバイトにならない窓は、どの値でも書けない
+    // そのまま作り直して同じバイトにならない範囲は、どの値でも書けない
     if let Some(s) = slices.iter().find(|s| escape(&unescape(&s.escaped)) != s.escaped) {
         return Err(format!("an H.264 slice header does not re-escape to the same bytes ({} bytes)", s.escaped.len()));
     }
-    'candidates: for d in candidates {
+    if let Some(s) = slices.iter().find(|s| s.slice.lsb_pos + width + WINDOW_MARGIN_BITS > unescape(&s.escaped).len() * 8)
+    {
+        return Err(format!("an H.264 slice header is too long to rewrite ({} bytes)", s.escaped.len()));
+    }
+    let mut chosen: Option<(u32, Vec<Vec<u8>>)> = None;
+    'candidates: for (n, d) in candidates.enumerate() {
+        if n % 64 == 63 {
+            cancel.check()?;
+        }
         let add = (prev_lsb + d + max_lsb - first % max_lsb) % max_lsb;
-        let mut writes: Vec<(Vec<u8>, &[u64])> = Vec::with_capacity(slices.len());
+        let mut rewritten: Vec<Vec<u8>> = Vec::with_capacity(slices.len());
         for s in &slices {
             let mut rbsp = unescape(&s.escaped);
-            if s.slice.lsb_pos + width + WINDOW_MARGIN_BITS > rbsp.len() * 8 {
-                return Err("an H.264 slice header is too long to rewrite".into());
-            }
             write_bits(&mut rbsp, s.slice.lsb_pos, width, (s.slice.lsb + add) % max_lsb);
             let escaped = escape(&rbsp);
             if escaped.len() != s.escaped.len() {
                 continue 'candidates; // エミュレーション防止バイトの数が変わる
             }
-            writes.push((escaped, &s.offsets));
+            rewritten.push(escaped);
         }
-        for (bytes, offsets) in writes {
-            // 窓のバイトは TS のパケットの境目で分かれていることがある
-            let mut k = 0;
-            while k < bytes.len() {
-                let mut run = 1;
-                while k + run < bytes.len() && offsets[k + run] == offsets[k] + run as u64 {
-                    run += 1;
-                }
-                file.seek(SeekFrom::Start(offsets[k])).map_err(|e| e.to_string())?;
-                file.write_all(&bytes[k..k + run]).map_err(|e| e.to_string())?;
-                k += run;
-            }
-        }
-        file.flush().map_err(|e| e.to_string())?;
-        return Ok(Some(add));
+        chosen = Some((add, rewritten));
+        break;
     }
-    Err("no picture order offset keeps the slice sizes".into())
+    let Some((add, rewritten)) = chosen else {
+        return Err("no picture order offset keeps the slice sizes".into());
+    };
+    cancel.check()?;
+    for (s, bytes) in slices.iter().zip(&rewritten) {
+        // 範囲は TS のパケットの境目で分かれていることがある
+        let mut k = 0;
+        for &(pos, len) in &s.runs {
+            let len = len as usize;
+            file.seek(SeekFrom::Start(pos)).map_err(|e| e.to_string())?;
+            file.write_all(&bytes[k..k + len]).map_err(|e| e.to_string())?;
+            k += len;
+        }
+    }
+    file.flush().map_err(|e| e.to_string())?;
+    Ok((Some(add), scan.broken))
 }
 
 /// 部分ファイル (TS) の最後の参照の絵の (下位の幅, 下位の値, それより後に表示される絵の POC の差の最大)。
-/// H.264 の POC の方式 0 でなければ None。読めなければ ValueError
+/// H.264 の POC の方式 0 でなければ None。読めなければ ValueError。cancel (threading.Event) が立つと
+/// ValueError("cancelled")
 #[pyfunction]
-pub fn h264_tail_order(py: Python<'_>, path: String) -> PyResult<Option<(usize, u32, i64)>> {
-    py.detach(|| tail_order(&path)).map_err(PyValueError::new_err)
+#[pyo3(signature = (path, cancel=None))]
+pub fn h264_tail_order(py: Python<'_>, path: String, cancel: Option<Py<PyAny>>) -> PyResult<Option<(usize, u32, i64)>> {
+    let cancel = Cancel(cancel);
+    py.detach(|| tail_order(&path, &cancel)).map_err(PyValueError::new_err)
 }
 
 /// コピーの部分ファイル (TS) の POC を、前の部分 (h264_tail_order の下位の値と差) に続くよう書き換える。
-/// 足した値、書き換える必要が無い (最初の絵が IDR など) 時は None。書き換えられなければ ValueError
+/// (足した値, 読めずに飛ばしたスライスなどの数)。書き換える必要が無い (最初の絵が IDR など) 時は足した値が None。
+/// 書き換えられなければ ValueError。cancel が立つと ValueError("cancelled") で、ファイルは変えない
 #[pyfunction]
-pub fn h264_continue_order(py: Python<'_>, path: String, prev_lsb: u32, ahead: i64) -> PyResult<Option<u32>> {
-    py.detach(|| shift_order(&path, prev_lsb, ahead)).map_err(PyValueError::new_err)
+#[pyo3(signature = (path, prev_lsb, ahead, cancel=None))]
+pub fn h264_continue_order(
+    py: Python<'_>,
+    path: String,
+    prev_lsb: u32,
+    ahead: i64,
+    cancel: Option<Py<PyAny>>,
+) -> PyResult<(Option<u32>, usize)> {
+    let cancel = Cancel(cancel);
+    py.detach(|| shift_order(&path, prev_lsb, ahead, &cancel)).map_err(PyValueError::new_err)
 }
 
 #[cfg(test)]
@@ -539,6 +718,44 @@ mod tests {
         let escaped = escape(&raw);
         assert_eq!(escaped, vec![0, 0, 3, 0, 1, 0, 0, 3, 3, 7, 0, 0]);
         assert_eq!(unescape(&escaped), raw.to_vec());
+    }
+
+    /// "0101…" のビットの並びをバイトにする (足りない所は 1 と 0 で埋める: RBSP の終わり)
+    fn bits(text: &str) -> Vec<u8> {
+        let mut bits: Vec<u8> = text.bytes().filter(|b| *b == b'0' || *b == b'1').map(|b| b - b'0').collect();
+        bits.push(1);
+        while bits.len() % 8 != 0 {
+            bits.push(0);
+        }
+        bits.chunks(8).map(|c| c.iter().fold(0u8, |v, b| (v << 1) | b)).collect()
+    }
+
+    /// Baseline の SPS: NAL の見出し, profile 66, 制約と level, sps_id 0, log2_max_frame_num_minus4 と方式 0 の
+    /// log2_max_pic_order_cnt_lsb_minus4 (どちらも ue の文字), 残り (参照数 1, 隙間なし, 大きさ, frame_mbs_only)
+    fn sps(frame_num: &str, poc_lsb: &str) -> Vec<u8> {
+        bits(&format!("01100111 01000010 00000000 00011110 1 {frame_num} 1 {poc_lsb} 010 0 1 1 0"))
+    }
+
+    #[test]
+    fn sps_widths_are_limited_to_the_standard() {
+        // ue: "1" = 0, "0001101" = 12, "0001110" = 13
+        let (_, ok) = parse_sps(&sps("1", "0001101")).unwrap();
+        assert_eq!((ok.log2_max_frame_num, ok.log2_max_poc_lsb), (4, 16));
+        assert!(parse_sps(&sps("1", "0001110")).unwrap_err().contains("pic_order_cnt_lsb"));
+        assert!(parse_sps(&sps("0001110", "1")).unwrap_err().contains("frame_num"));
+        // 32 ビットを超える幅 (ずらすとあふれた)
+        assert!(parse_sps(&sps("1", "00000100011")).is_err());
+    }
+
+    #[test]
+    fn rewrite_range_covers_the_needed_bits_and_ends_safely() {
+        // 00 00 03 の 03 は数えない: 先頭 3 バイトの RBSP は 2 バイト
+        let es = [0x41u8, 0x00, 0x00, 0x03, 0x01, 0x55, 0x66, 0x77];
+        assert_eq!(rewrite_end(&es, 0, es.len(), 8), Some(1));
+        // 2 バイト目までに 00 00 03 が来る: 03 の直後では終わらない
+        assert_eq!(rewrite_end(&es, 0, es.len(), 24), Some(5));
+        assert_eq!(rewrite_end(&es, 0, es.len(), 8 * 20), None);
+        assert_eq!(runs_of(&[10, 11, 12, 200, 201]), vec![(10, 3), (200, 2)]);
     }
 
     #[test]

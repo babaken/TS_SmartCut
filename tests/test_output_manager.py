@@ -292,3 +292,58 @@ def test_place_output_failure_removes_only_its_own_file(tmp_path, monkeypatch):
     assert error.value.code == "E002"
     assert target.read_bytes() == b"someone else's file"
     assert not target.with_name("rec_cut_001.ts").exists()
+
+
+def test_copy_to_another_drive_stops_on_cancel_and_removes_the_claimed_file(tmp_path, monkeypatch):
+    # 一時フォルダが別のドライブの時は写す(数十秒かかる)。スキップ・中止が押されたら写すのをやめ、
+    # この変換のために確保したファイルを消す(2026-11-17)
+    import threading
+
+    from ts_smartcut.core import output_manager as output_manager_module
+    from ts_smartcut.errors import ProcessingCancelledError
+
+    source = tmp_path / "work" / "output.ts"
+    source.parent.mkdir()
+    source.write_bytes(b"x" * (20 << 20))
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    (out_dir / "keep.ts").write_bytes(b"someone else's file")
+
+    def other_drive(src, dst):
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr(output_manager_module.os, "replace", other_drive)
+    event = threading.Event()
+    import builtins
+
+    real_write = builtins.open
+
+    chunks = []
+
+    class Counting:
+        def __init__(self, f):
+            self.f = f
+
+        def __enter__(self):
+            self.f.__enter__()
+            return self
+
+        def __exit__(self, *a):
+            return self.f.__exit__(*a)
+
+        def read(self, n):
+            chunks.append(n)
+            if len(chunks) == 2:
+                event.set()  # 写している途中で押す
+            return self.f.read(n)
+
+        def write(self, b):
+            return self.f.write(b)
+
+    monkeypatch.setattr(output_manager_module, "open", lambda p, mode="r", *a, **k: Counting(real_write(p, mode, *a, **k)),
+                        raising=False)
+    manager = OutputManager(AppSettings())
+    with pytest.raises(ProcessingCancelledError):
+        manager.place_output(source, out_dir / "out.ts", tmp_path / "rec.ts", cancel_event=event)
+    assert sorted(p.name for p in out_dir.iterdir()) == ["keep.ts"]
+    assert len(chunks) == 2  # 全部は写していない

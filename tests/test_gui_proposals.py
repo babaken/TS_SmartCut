@@ -9,9 +9,9 @@ from ts_smartcut.models import PROPOSAL_ACCEPTED, CutProposal
 
 
 @pytest.fixture
-def opened(window, sample_video, monkeypatch):
+def opened(window, interlaced_sample_video, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.batch_manager.items.clear()
     yield window
     window.batch_manager.items.clear()
@@ -132,7 +132,7 @@ from ts_smartcut.gui import main_window as main_window_module  # noqa: E402
 
 
 @pytest.fixture
-def loading(window, sample_video, monkeypatch, qapp):
+def loading(window, interlaced_sample_video, monkeypatch, qapp):
     """録画を開くと案を作る(番組情報と案の準備は差し替え。案は release() まで出ない)。"""
     start = datetime(2026, 9, 30, 22, 0, tzinfo=JST)
     info = ProgramInfo(service_id=1, service_name="局", recording_start=start,
@@ -163,9 +163,9 @@ def _locked(window):
     return not window.centralWidget().isEnabled() and not window.menuBar().isEnabled()
 
 
-def test_loading_popup_locks_the_window_until_the_proposals_arrive(loading, sample_video, qapp):
+def test_loading_popup_locks_the_window_until_the_proposals_arrive(loading, interlaced_sample_video, qapp):
     window, release, calls, _info = loading
-    assert window.open_file(sample_video)
+    assert window.open_file(interlaced_sample_video)
     assert window._loading and _locked(window) and window._loading_dialog.isVisible()
     pump_events(qapp, lambda: window._loading_dialog.stage == "proposals")
     assert window._loading_dialog.skip_button.isVisible()
@@ -178,9 +178,9 @@ def test_loading_popup_locks_the_window_until_the_proposals_arrive(loading, samp
     assert [(p.start_frame, p.end_frame) for p in window.cut_manager.pending_proposals] == [(0, 20)]
 
 
-def test_skip_unlocks_and_drops_the_proposals(loading, sample_video, qapp):
+def test_skip_unlocks_and_drops_the_proposals(loading, interlaced_sample_video, qapp):
     window, release, calls, _info = loading
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: window._loading_dialog.stage == "proposals")
     window._loading_dialog.skip_button.click()
     assert not window._loading and not _locked(window)
@@ -190,19 +190,19 @@ def test_skip_unlocks_and_drops_the_proposals(loading, sample_video, qapp):
     assert window.cut_manager.proposals == []
 
 
-def test_recording_without_program_info_unlocks_after_reading(loading, sample_video, qapp, monkeypatch):
+def test_recording_without_program_info_unlocks_after_reading(loading, interlaced_sample_video, qapp, monkeypatch):
     window, release, calls, _info = loading
     monkeypatch.setattr(main_window_module, "read_program_info", lambda path: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: not window._loading)
     assert not _locked(window) and calls == []
 
 
-def test_no_proposals_while_a_batch_runs(loading, sample_video, qapp):
+def test_no_proposals_while_a_batch_runs(loading, interlaced_sample_video, qapp):
     window, release, calls, _info = loading
     window.batch_manager.is_running = True
     try:
-        window.open_file(sample_video)
+        window.open_file(interlaced_sample_video)
         assert not window._loading
         assert window.proposal_status_label.text() == "バッチ処理中のため自動カットの案は作りません"
     finally:

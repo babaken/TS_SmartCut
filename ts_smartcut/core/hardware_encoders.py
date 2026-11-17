@@ -43,11 +43,11 @@ def _ffmpeg(settings: AppSettings) -> str:
     return _tool_path(settings.ffmpeg_path, "ffmpeg")
 
 
-def _ffmpeg_changed(saved: HardwareDetection, settings: AppSettings) -> bool:
-    """判定した時と ffmpeg のビルドが違うか。今の ffmpeg の版が読めない時(見つからない・時間切れ)は
-    違うとみなさない(読めないたびに判定し直さない)。"""
+def _changed_ffmpeg_build(saved: HardwareDetection, settings: AppSettings) -> Optional[str]:
+    """判定した時と ffmpeg のビルドが違えば今のビルド、同じなら None。今の ffmpeg の版が読めない時
+    (見つからない・時間切れ)は違うとみなさない(読めないたびに判定し直さない)。"""
     current = DependencyChecker.ffmpeg_build_id(_ffmpeg(settings))
-    return current is not None and current != saved.ffmpeg_build
+    return current if current is not None and current != saved.ffmpeg_build else None
 
 
 def get_hardware_encoders(settings: AppSettings, force: bool = False) -> HardwareDetection:
@@ -70,9 +70,9 @@ def get_hardware_encoders(settings: AppSettings, force: bool = False) -> Hardwar
                     logger.info("Detecting hardware encoders again because the detection method changed")
                 elif saved.hardware_id != hardware_fingerprint():
                     logger.info("Detecting hardware encoders again because the GPU/CPU configuration changed")
-                elif _ffmpeg_changed(saved, settings):
+                elif (current := _changed_ffmpeg_build(saved, settings)) is not None:
                     logger.info("Detecting hardware encoders again because ffmpeg changed (%s -> %s)",
-                                saved.ffmpeg_build, DependencyChecker.ffmpeg_build_id(_ffmpeg(settings)))
+                                saved.ffmpeg_build, current)
                 else:
                     _cached = saved
                     return _cached

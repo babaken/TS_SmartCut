@@ -326,6 +326,11 @@ def test_field_pictures_are_merged_into_frames():
     # 長さの分からないパケットはまとめない
     unknown = [(10.0, 0.0, True), (10.0 + field, 0.0, False)]
     assert merge_field_pictures(unknown, fps) == unknown
+    # 読み始めが 2 つ目のフィールド(B の下)でも組がずれない: キーフレームより前は 1 つずつ
+    late = [(9.0 + field, field, False), (9.0 + 2 * field, field, False), (9.0 + 3 * field, field, False)] + packets
+    merged = merge_field_pictures(late, fps)
+    assert merged[:3] == late[:3]
+    assert merged[3:] == [(10 + frame * 2 * field, 2 * field, frame == 0) for frame in (0, 3, 1, 2)]
 
 
 def test_stream_packets_count_field_pictures_as_one_frame(monkeypatch, tmp_path):
@@ -376,3 +381,15 @@ def test_get_scan_type(wrapper, sample_video, tmp_path):
     assert wrapper.get_scan_type(interlaced) == SCAN_INTERLACED
     assert wrapper.get_scan_type(make_soft_telecine_source(tmp_path / "st.ts")) == SCAN_SOFT_TELECINE
     assert wrapper.get_scan_type(make_mixed_scan_source(tmp_path / "mixed.ts")) == SCAN_MIXED
+
+
+def test_keyframe_read_stops_on_cancel(sample_video, isolated_keyframe_cache_dir):
+    # 長い録画のキーフレームの読み込み(数分)もスキップ・中止で止まり、途中までの結果は覚えない(2026-11-17)
+    from ts_smartcut.errors import ProcessingCancelledError
+
+    wrapper = FFmpegWrapper()
+    wrapper.cancel_event.set()
+    with pytest.raises(ProcessingCancelledError):
+        wrapper.get_keyframes(sample_video)
+    wrapper.cancel_event.clear()
+    assert wrapper.get_keyframes(sample_video)  # 覚えていないので、読み直して正しく返す

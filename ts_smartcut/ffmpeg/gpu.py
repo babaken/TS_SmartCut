@@ -294,6 +294,7 @@ def probe_interlaced_encoding(
     ffprobe_path: Union[str, Path] = "ffprobe",
     device: Optional[str] = None,
     timeout: float = 20,
+    source: Optional[Path] = None,
 ) -> bool:
     """インターレース(トップフィールドが先)のままエンコードできるか。実際の再エンコード
     (ffmpeg/smart_cut.py)と同じフィルターと指定で数フレームを符号化し、出力の全フレームが
@@ -304,14 +305,16 @@ def probe_interlaced_encoding(
     フィルターの setpts の後でフレームレートを失い、h264_qsv が開けなかった(2026-11-16)。これは
     TS から読んだ映像の時だけ起き、テスト画像(lavfi)を直接符号化すると起きない(7.1.5、2026-11-17
     実測)ので、試しもまず小さなインターレースの TS を作り、それを読んで符号化する。
-    GPU が使えるかは版の番号ではなく、この試しで決める(2026-11-17 利用者の決定)。"""
+    GPU が使えるかは版の番号ではなく、この試しで決める(2026-11-17 利用者の決定)。
+    source は試しの入力(_interlaced_probe_source)。判定では GPU・コーデックごとに同じものを使う(無ければ作る)。"""
     hw_args = hw_input_args(encoder_name, device)
     if encoder_gpu_type(encoder_name) == "vaapi" and not hw_args:
         return False
     variants = [["-bf", "0"], []] if encoder_name.startswith("h264") else [["-bf", "0"]]
     # アプリの一時フォルダ(実行ファイルの横の Temp/)に書く。OS の一時フォルダは使わない(2026-11-16)
     with tempfile.TemporaryDirectory(prefix="probe_", dir=app_temp_dir()) as tmp:
-        source = _interlaced_probe_source(ffmpeg_path, Path(tmp), timeout)
+        if source is None:
+            source = _interlaced_probe_source(ffmpeg_path, Path(tmp), timeout)
         if source is None:
             return False
         return all(_probe_interlaced_once(encoder_name, ffmpeg_path, ffprobe_path, hw_args, extra, timeout,
@@ -511,14 +514,26 @@ def detect_hardware_encoders(
     build = DependencyChecker.ffmpeg_build_id(ffmpeg_path)
     if not candidates:
         return HardwareDetection(None, [], fingerprint, ffmpeg_build=build)
-    for gpu in candidates:
-        for codec in CODECS:
-            encoder = _GPU_ENCODER_MAP.get(gpu.api, {}).get(codec)
-            progressive = bool(encoder) and probe_encoder_functional(encoder, ffmpeg_path, device=gpu.device)
-            interlaced = progressive and probe_interlaced_encoding(
-                encoder, ffmpeg_path, ffprobe_path, device=gpu.device
-            )
-            gpu.capabilities[codec] = {"progressive": progressive, "interlaced": interlaced}
+    # インターレースの試しの入力は 1 回だけ作り、GPU・コーデックごとに使い回す(要る時だけ作る)
+    with tempfile.TemporaryDirectory(prefix="probe_", dir=app_temp_dir()) as tmp:
+        shared: List[Optional[Path]] = []
+
+        def probe_source() -> Optional[Path]:
+            if not shared:
+                shared.append(_interlaced_probe_source(ffmpeg_path, Path(tmp), 20))
+            return shared[0]
+
+        for gpu in candidates:
+            for codec in CODECS:
+                encoder = _GPU_ENCODER_MAP.get(gpu.api, {}).get(codec)
+                progressive = bool(encoder) and probe_encoder_functional(encoder, ffmpeg_path, device=gpu.device)
+                interlaced = False
+                if progressive:
+                    source = probe_source()
+                    interlaced = source is not None and probe_interlaced_encoding(
+                        encoder, ffmpeg_path, ffprobe_path, device=gpu.device, source=source
+                    )
+                gpu.capabilities[codec] = {"progressive": progressive, "interlaced": interlaced}
     return HardwareDetection(candidates[0], candidates, fingerprint, ffmpeg_build=build)
 
 

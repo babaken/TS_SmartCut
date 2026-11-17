@@ -11,14 +11,13 @@ from __future__ import annotations
 
 import logging
 import os
-import shutil
 import threading
 import time
 from pathlib import Path
 from typing import Callable, List, Optional
 
 from ts_smartcut.core import script_output
-from ts_smartcut.core.output_manager import OutputManager
+from ts_smartcut.core.output_manager import OutputManager, copy_file
 from ts_smartcut.errors import FileIOError, ProcessingCancelledError, TSSmartCutError, ValidationError
 from ts_smartcut.ffmpeg.smart_cut import PROCESSING_MODES, ProcessingProgressEvent, SmartCutEngine
 from ts_smartcut.ffmpeg.wrapper import FFmpegWrapper
@@ -509,8 +508,11 @@ class BatchManager:
                     mode=item.processing_mode,
                     progress_callback=_on_part_progress,
                 )
+                # 結合の後に押したスキップ・中止でも出力は置かない(置き終わった後なら Done のまま、2026-11-17)
+                self._stop_if_cancelled()
                 output_path = self.output_manager.place_output(
-                    joined, output_path, item.file_info.file_path, reserved=reserved
+                    joined, output_path, item.file_info.file_path, reserved=reserved,
+                    cancel_event=self.ffmpeg.cancel_event,
                 )
         finally:
             if self.settings.temp_directory is None:
@@ -550,6 +552,7 @@ class BatchManager:
         progress(0.0)
         plan = script_output.plan_script(self.ffmpeg, item.file_info)
         progress(50.0)
+        self._stop_if_cancelled()
 
         temp_dir = self.settings.temp_directory or output_path.parent / TEMP_SUBDIR_NAME
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -561,10 +564,12 @@ class BatchManager:
             with locked_run_dir(temp_dir) as run_dir:
                 audio = run_dir / f"audio{script_output.AUDIO_SUFFIX}"
                 self.ffmpeg.run(script_output.audio_args(plan, source, audio))
+                self._stop_if_cancelled()
                 try:
                     os.replace(audio, audio_path)  # 確保した空のファイルを置き換える
                 except OSError:
-                    shutil.copyfile(audio, audio_path)  # 一時フォルダが別のドライブ
+                    copy_file(audio, audio_path, self.ffmpeg.cancel_event)  # 一時フォルダが別のドライブ
+            self._stop_if_cancelled()
             # L-SMASH Works の索引(.lwi)はスクリプトと同じフォルダに作らせる(録画の横には作らない)
             video_expression, audio_expression = script_output.source_expressions(
                 fmt, source, audio_path, cache_dir=script_path.parent)
@@ -583,6 +588,13 @@ class BatchManager:
                 except OSError:
                     pass
         item.output_path = script_path
+
+    def _stop_if_cancelled(self) -> None:
+        """スキップ・中止が押されていれば E504(出力を置く前・スクリプトを書く前に確かめる)。ffmpeg が
+        動いていない間に押されると、ffmpeg の中止では止まらず、出力を置いて Done にしていた(2026-11-17 の
+        レビュー)。"""
+        if self.ffmpeg.cancel_event.is_set():
+            raise ProcessingCancelledError("E504", key="exceptions.cancelled")
 
     def _estimate_remaining(self, elapsed: float, index: int, fraction: float) -> float:
         completed_files = index + fraction

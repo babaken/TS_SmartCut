@@ -27,11 +27,11 @@ def messages(monkeypatch):
 
 
 @pytest.fixture
-def opened(window, sample_video, tmp_path, monkeypatch):
+def opened(window, interlaced_sample_video, tmp_path, monkeypatch):
     # 実際のGPUで試しエンコードする判定は時間がかかるのでソフトウェアで処理する
     monkeypatch.setattr(type(window), "_encode_hardware", HardwareDetection())
     window.settings.default_output_dir = tmp_path
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.cut_manager.cuts.clear()
     window.batch_manager.items.clear()
     yield window

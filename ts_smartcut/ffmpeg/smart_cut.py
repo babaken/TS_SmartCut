@@ -30,7 +30,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
-from ts_smartcut.errors import MuxFailedError, UnsupportedCodecError, ValidationError
+from ts_smartcut.errors import MuxFailedError, ProcessingCancelledError, UnsupportedCodecError, ValidationError
 from ts_smartcut.ffmpeg.compat import bytes_per_frame, x264_rate_args
 from ts_smartcut.ffmpeg.gpu import (
     HardwareDetection,
@@ -897,20 +897,31 @@ class SmartCutEngine:
             logger.warning("Cannot continue the H.264 picture order at joins, B-frames after them may not play: %s",
                            e.log_message)
             return
+        # 書き換えは部分を読み終えてからなので、中止で止めてもファイルは変わらない。前の部分は終わりだけを読むが、
+        # IDR の無い部分は終わりまで読む(共有フォルダ・遅いディスクで 1 分を超えうる)ので、中止を Rust に渡す
+        cancel = self.ffmpeg.cancel_event
         for index in range(1, len(parts)):
             if parts[index].action != "copy":
                 continue
+            if cancel.is_set():
+                raise ProcessingCancelledError("E504", key="exceptions.cancelled")
             previous, path = video_files[index - 1][0], video_files[index][0]
             try:
-                tail = native.h264_tail_order(str(previous))
+                tail = native.h264_tail_order(str(previous), cancel=cancel)
                 if tail is None:
                     logger.warning("The part before %s has no picture order to continue", path.name)
                     continue
                 _, last_lsb, ahead = tail
-                added = native.h264_continue_order(str(path), last_lsb, ahead)
+                added, broken = native.h264_continue_order(str(path), last_lsb, ahead, cancel=cancel)
             except ValueError as e:
+                if cancel.is_set():
+                    raise ProcessingCancelledError("E504", key="exceptions.cancelled") from e
                 logger.warning("Could not continue the H.264 picture order into %s: %s", path.name, e)
                 continue
+            if broken:
+                # 受信エラーなどで読めないスライスは書き換えずに残す(もともとデコードできない所)
+                logger.warning("Left %d unreadable H.264 slices or parameter sets in %s as they are",
+                               broken, path.name)
             if added is not None:
                 logger.info("Continued the H.264 picture order into %s (+%d)", path.name, added)
 

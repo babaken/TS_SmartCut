@@ -21,12 +21,13 @@ import logging
 import os
 import shutil
 import string
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable, Iterator, Optional
 
 from ts_smartcut.core.script_output import COMPANION_SUFFIXES, SCRIPT_EXTENSIONS, companion_path
-from ts_smartcut.errors import FileIOError, ValidationError
+from ts_smartcut.errors import FileIOError, ProcessingCancelledError, ValidationError
 from ts_smartcut.i18n.language_manager import tr
 from ts_smartcut.models import AppSettings
 
@@ -36,7 +37,7 @@ DEFAULT_FILENAME_PATTERN = AppSettings().output_filename_pattern
 SCRIPT_SUFFIXES = set(SCRIPT_EXTENSIONS.values())
 # 拡張子とみなして元の録画の拡張子に置き換えるもの。ほかの「.」の後ろ(「1.5話」の「.5話」など)は名前の一部
 _CONTAINER_SUFFIXES = {".ts", ".m2ts", ".mts", ".m2t", ".tp", ".trp", ".mp4", ".m4v", ".mkv", ".mka", ".mov",
-                       ".avi", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".vob", ".nut", ".avs", ".vpy"}
+                       ".avi", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".vob", ".nut"} | SCRIPT_SUFFIXES
 # ファイル名パターンで使える置き換え文字 (design doc §9.2)
 PATTERN_FIELDS = ("name", "ext", "date", "time")
 
@@ -82,6 +83,24 @@ def validate_output_stem(stem: str) -> Optional[str]:
     if stem.split(".")[0].upper() in _RESERVED_NAMES:
         return tr("output_name.name_reserved", name=stem)
     return None
+
+
+# 写す時に一度に読む大きさ。読むごとに中止を確かめる
+_COPY_CHUNK = 8 << 20
+
+
+def copy_file(source: Path, target: Path, cancel_event: Optional[threading.Event] = None) -> None:
+    """source を target(もうある空のファイル)へ写す。cancel_event が立ったら途中でやめて E504。
+    大きな出力を別のドライブへ写すと数十秒かかり、その間スキップが効かなかった(2026-11-17 のレビュー)。
+    途中までのファイルは呼び出し側が消す。"""
+    if cancel_event is None:
+        shutil.copyfile(source, target)
+        return
+    with open(source, "rb") as src, open(target, "wb") as dst:
+        while chunk := src.read(_COPY_CHUNK):
+            if cancel_event.is_set():
+                raise ProcessingCancelledError("E504", key="exceptions.cancelled")
+            dst.write(chunk)
 
 
 class OutputManager:
@@ -143,13 +162,15 @@ class OutputManager:
     def _free_path(self, path: Path, input_path: Path, reserved: Iterable[Path]) -> Path:
         return next(p for p in self._numbered(path) if not self._collides(p, input_path, reserved))
 
-    def place_output(self, source: Path, output_path: Path, input_path: Path, reserved: Iterable[Path] = ()) -> Path:
+    def place_output(self, source: Path, output_path: Path, input_path: Path, reserved: Iterable[Path] = (),
+                     cancel_event: Optional[threading.Event] = None) -> Path:
         """一時フォルダで作った出力 source を output_path に置き、置いたパスを返す。その名前が
         もう使われていれば連番の名前にする(既存のファイルは上書きしない)。
 
         名前は「無い時だけ作る」(open の "x")で確保してから置く。確かめてから置くまでの間に
         他のアプリが同じ名前のファイルを作っても上書きしない(Linux の rename は黙って上書きする)。
-        失敗した時に消すのは、ここで確保したファイルだけ。"""
+        失敗した時に消すのは、ここで確保したファイルだけ。一時フォルダが別のドライブの時は写すので、
+        cancel_event が立ったら写すのをやめ、確保したファイルを消して E504(スキップ・中止、2026-11-17)。"""
         output_path, input_path = Path(output_path), Path(input_path).resolve()
         reserved = [Path(r) for r in reserved]
         for candidate in self._numbered(output_path):
@@ -167,7 +188,7 @@ class OutputManager:
                     os.replace(source, candidate)  # 同じドライブなら名前を変えるだけ
                 except OSError:
                     # 一時フォルダを別のドライブに設定した時。source は呼び出し側が一時フォルダごと消す
-                    shutil.copyfile(source, candidate)
+                    copy_file(source, candidate, cancel_event)
             except OSError as e:
                 candidate.unlink(missing_ok=True)
                 raise FileIOError("E002", key="exceptions.output_write_failed", path=candidate, error=e)

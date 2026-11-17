@@ -20,12 +20,13 @@ ERROR_DESCRIPTIONS: dict[str, str] = {
     "E103": "mpv startup error",
     "E104": "IPC communication error",
     "E105": "mpv not available",
-    # E201-E205: Validation
+    # E201-E206: Validation
     "E201": "Invalid range",
     "E202": "Overlapping range",
     "E203": "Frame out of range",
     "E204": "Start frame is not before end frame",
     "E205": "Script template error",
+    "E206": "Unsupported scan type",
     # E301-E303: GPU
     "E301": "GPU initialization error",
     "E302": "Unsupported codec",
@@ -120,7 +121,7 @@ class MPVNotAvailableError(MPVError):
     """E105"""
 
 
-# E201-E205: Validation
+# E201-E206: Validation
 class ValidationError(TSSmartCutError):
     pass
 

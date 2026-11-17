@@ -30,8 +30,8 @@ def test_save_without_file_shows_message(window, captured_dialogs):
     assert len(captured_dialogs["information"]) == 1
 
 
-def test_save_project_writes_cuts_and_bookmarks(window, sample_video, tmp_path):
-    assert window.open_file(sample_video) is True
+def test_save_project_writes_cuts_and_bookmarks(window, interlaced_sample_video, tmp_path):
+    assert window.open_file(interlaced_sample_video) is True
     assert window.save_project_action.isEnabled() is True
     window.cut_manager.add_cut(10, 20, "CM1")
     window.cut_manager.add_cut(40, 50)
@@ -42,7 +42,7 @@ def test_save_project_writes_cuts_and_bookmarks(window, sample_video, tmp_path):
 
     data = json.loads(path.read_text(encoding="utf-8"))
     assert data["version"] == CURRENT_PROJECT_VERSION
-    assert data["file_info"]["file_path"] == str(sample_video)
+    assert data["file_info"]["file_path"] == str(interlaced_sample_video)
     assert [(c["start_frame"], c["end_frame"], c["label"]) for c in data["file_info"]["cuts"]] == [
         (10, 20, "CM1"),
         (40, 50, None),
@@ -67,10 +67,10 @@ def test_ctrl_s_after_save_overwrites_same_path(window, tmp_path, monkeypatch):
     assert data["created_at"] == created_at.isoformat()
 
 
-def test_open_project_restores_cuts_and_bookmarks_without_undo_history(window, sample_video, captured_dialogs):
+def test_open_project_restores_cuts_and_bookmarks_without_undo_history(window, interlaced_sample_video, captured_dialogs):
     path = window._project_path
     # 別の状態にしてから読み込み直す
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     assert window.cut_manager.cuts == []
     assert window._project_path is None
 
@@ -129,7 +129,7 @@ def test_open_corrupt_project_shows_error(window, tmp_path, captured_dialogs):
     assert "E401" in captured_dialogs["critical"][0][2]
 
 
-def test_save_as_appends_json_suffix(window, sample_video, tmp_path, monkeypatch):
+def test_save_as_appends_json_suffix(window, interlaced_sample_video, tmp_path, monkeypatch):
     target = tmp_path / "sample.mp4"
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), ""))
 

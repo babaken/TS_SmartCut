@@ -26,11 +26,11 @@ def window(qapp, tmp_path_factory):
     qapp.processEvents()
 
 
-def test_add_to_batch_and_process_end_to_end(window, qapp, sample_video, monkeypatch):
+def test_add_to_batch_and_process_end_to_end(window, qapp, interlaced_sample_video, monkeypatch):
     # バッチが終わったら、特徴を保存した録画の局でしきい値の自動補正を始める(設計書 §31.9、2026-10-15)
     tune_calls = []
     monkeypatch.setattr(window.auto_tuner, "start", lambda keys=(): tune_calls.append(list(keys)) or True)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: window.preview_widget.get_current_frame() is not None, timeout_ms=3000)
 
     window.cut_manager.add_cut(30, 45)
