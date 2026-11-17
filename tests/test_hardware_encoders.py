@@ -22,7 +22,15 @@ def hardware(monkeypatch):
 
 
 @pytest.fixture
-def counting_detector(monkeypatch, hardware):
+def ffmpeg_build(monkeypatch):
+    """入っている ffmpeg のビルド(DependencyChecker.ffmpeg_build_id)。テストから差し替える。"""
+    current = {"id": "n8.1.3 (0123456789ab)"}
+    monkeypatch.setattr(module.DependencyChecker, "ffmpeg_build_id", staticmethod(lambda path=None: current["id"]))
+    return current
+
+
+@pytest.fixture
+def counting_detector(monkeypatch, hardware, ffmpeg_build):
     calls = []
 
     def fake_detect(**kwargs):
@@ -33,6 +41,7 @@ def counting_detector(monkeypatch, hardware):
                 {"h264": {"progressive": True, "interlaced": False}},
             ),
             hardware_id=hardware["id"],
+            ffmpeg_build=ffmpeg_build["id"],
         )
 
     monkeypatch.setattr(module, "detect_hardware_encoders", fake_detect)
@@ -98,3 +107,27 @@ def test_result_from_older_detection_method_is_redetected(counting_detector):
     module.clear_cache()
     module.get_hardware_encoders(AppSettings())
     assert len(counting_detector) == 2
+
+
+def test_changed_ffmpeg_is_redetected(counting_detector, ffmpeg_build):
+    # GPU の部品の有無や動きは ffmpeg のビルドで違う。入れ替えたら判定し直す(2026-11-17、利用者の決定)
+    module.get_hardware_encoders(AppSettings())
+    module.clear_cache()
+    ffmpeg_build["id"] = "n7.1.5 (fedcba987654)"
+    module.get_hardware_encoders(AppSettings())
+    assert len(counting_detector) == 2
+    saved = json.loads(module.detection_path().read_text(encoding="utf-8"))
+    assert saved["ffmpeg_build"] == "n7.1.5 (fedcba987654)"
+
+    module.clear_cache()
+    module.get_hardware_encoders(AppSettings())
+    assert len(counting_detector) == 2
+
+
+def test_unreadable_ffmpeg_does_not_redetect(counting_detector, ffmpeg_build):
+    # 版が読めない時(時間切れなど)は、起動のたびに判定し直さない
+    module.get_hardware_encoders(AppSettings())
+    module.clear_cache()
+    ffmpeg_build["id"] = None
+    module.get_hardware_encoders(AppSettings())
+    assert len(counting_detector) == 1

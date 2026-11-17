@@ -929,8 +929,10 @@ impl RuleRecording {
         logo_corners: usize,
     ) -> RuleRecording {
         let mut logo_cumsum = Vec::new();
+        // 点数が隅の数より短い (幅 0) 時はロゴ無しとして扱う。chunks_exact(0) は異常終了する (2026-11-17)
         if let Some(data) = logo_scores
             && logo_corners > 0
+            && data.as_bytes().len() >= logo_corners
         {
             let bytes = data.as_bytes();
             let width = bytes.len() / logo_corners;

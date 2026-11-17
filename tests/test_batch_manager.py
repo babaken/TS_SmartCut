@@ -43,7 +43,7 @@ class FakeFFmpegWrapper:
         # segment全体がちょうど1つのBodyコピーになるよう先頭と末尾のみ。
         return [0, 100]
 
-    def get_video_packet_times(self, file_path, start, end):
+    def get_video_packet_times(self, file_path, start, end, fps=None):
         # 25fps・100フレームの等間隔(_file_infoと同じ)
         return [(k / 25.0, 1 / 25.0) for k in range(100) if start <= k / 25.0 <= end]
 
@@ -56,7 +56,7 @@ class FakeFFmpegWrapper:
             has_audio=False, audio_packet_duration=0.0,
         )
 
-    def run(self, args: List[str], progress_callback=None):
+    def run(self, args: List[str], progress_callback=None, bytes_per_frame=None):
         if self.cancel_event.is_set():
             raise ProcessingCancelledError("E504", "中止しました")
         self.run_call_count += 1
@@ -250,7 +250,7 @@ def test_cancelled_item_is_not_recorded(settings, isolated_autocut_history):
     started = threading.Event()
 
     class SlowFFmpeg(FakeFFmpegWrapper):
-        def run(self, args, progress_callback=None):
+        def run(self, args, progress_callback=None, bytes_per_frame=None):
             if self.run_call_count == 1:
                 started.set()
                 self.cancel_event.wait(10)
@@ -500,7 +500,7 @@ def test_temp_files_default_to_output_dir_and_are_cleaned_up(settings):
     written = []
 
     class RecordingFFmpeg(FakeFFmpegWrapper):
-        def run(self, args, progress_callback=None):
+        def run(self, args, progress_callback=None, bytes_per_frame=None):
             written.append(Path(args[-1]))
             return super().run(args, progress_callback)
 
@@ -595,7 +595,7 @@ def test_cancel_ends_the_item_with_e504_and_removes_partial_output(settings):
     started = threading.Event()
 
     class SlowFFmpeg(FakeFFmpegWrapper):
-        def run(self, args, progress_callback=None):
+        def run(self, args, progress_callback=None, bytes_per_frame=None):
             if self.run_call_count == 1:  # 2回目(結合)で出力を書きかけて待つ
                 Path(args[-1]).write_bytes(b"partial")
                 started.set()
@@ -680,7 +680,7 @@ def test_file_created_during_processing_is_not_overwritten(settings):
     target = settings.default_output_dir / "racing.mp4"
 
     class InterferingFFmpeg(FakeFFmpegWrapper):
-        def run(self, args, progress_callback=None):
+        def run(self, args, progress_callback=None, bytes_per_frame=None):
             assert Path(args[-1]) != target  # 出力先へ直接は書かない
             if not target.exists():
                 target.write_bytes(b"someone else's file")
@@ -703,7 +703,7 @@ def test_failed_item_never_deletes_a_file_it_did_not_write(settings):
     target = settings.default_output_dir / "victim.mp4"
 
     class FailingFFmpeg(FakeFFmpegWrapper):
-        def run(self, args, progress_callback=None):
+        def run(self, args, progress_callback=None, bytes_per_frame=None):
             target.write_bytes(b"someone else's file")
             raise MuxFailedError("E101", "fake ffmpeg failure")
 
@@ -736,3 +736,66 @@ def test_rename_item_only_for_unfinished_items_and_unique_names(settings):
         assert not mgr.rename_item(0, out / "d.mp4")
     finally:
         mgr.is_running = False
+
+
+
+# ---- スキップ(2026-11-17 の見直し) ------------------------------------------
+
+def test_skip_while_idle_does_not_skip_the_next_batch(settings):
+    # 止まっている時に押したスキップが残り、次に変換した項目が Skipped になった
+    mgr = BatchManager(settings, ffmpeg=FakeFFmpegWrapper())
+    mgr.add_item(_file_info("idle_skip_a"))
+    mgr.skip_current()
+    mgr.start()
+    mgr.thread.join(timeout=60)
+    assert mgr.items[0].status == STATUS_DONE
+
+
+class _SkipThenFail(FakeFFmpegWrapper):
+    """1 回目の ffmpeg の途中でスキップが押され、同時にその ffmpeg が失敗する。"""
+
+    def __init__(self):
+        super().__init__()
+        self.manager = None
+
+    def run(self, args, progress_callback=None, bytes_per_frame=None):
+        if self.run_call_count == 0:
+            self.run_call_count += 1
+            self.manager.skip_current()
+            raise MuxFailedError("E101", "fake ffmpeg failure")
+        return super().run(args, progress_callback, bytes_per_frame)
+
+
+def test_skip_on_a_failed_item_does_not_skip_the_next_item(settings):
+    ffmpeg = _SkipThenFail()
+    mgr = BatchManager(settings, ffmpeg=ffmpeg)
+    ffmpeg.manager = mgr
+    mgr.add_item(_file_info("skip_fail_a"))
+    mgr.add_item(_file_info("skip_fail_b"))
+    mgr.start()
+    mgr.thread.join(timeout=60)
+    assert [item.status for item in mgr.items] == [STATUS_ERROR, STATUS_DONE]
+
+
+def test_skip_during_conversion_stops_ffmpeg_and_places_no_output(settings, isolated_autocut_history):
+    # 変換中のスキップは ffmpeg を止め、出力を置かずに Skipped。次の項目の特徴の計算は止めない
+    ref = []
+    seen_stop = []
+    worker = _RecordingFeatureWorker(ref, lambda stop_event: seen_stop.append(stop_event.is_set()))
+    ffmpeg = FakeFFmpegWrapper()
+    mgr = BatchManager(settings, ffmpeg=ffmpeg, autocut_recorder=isolated_autocut_history, feature_worker=worker)
+    ref.append(mgr)
+    mgr.add_item(_file_info("convert_skip_a"))
+    mgr.add_item(_file_info("convert_skip_b"))
+    first = mgr.items[0].output_path
+
+    def on_progress(event):
+        if event.current_file == 1 and not ffmpeg.cancel_event.is_set() and mgr.items[0].status == "Processing":
+            mgr.skip_current()
+
+    mgr.start(progress_callback=on_progress)
+    mgr.thread.join(timeout=60)
+    assert [item.status for item in mgr.items] == [STATUS_SKIPPED, STATUS_DONE]
+    assert first is None or not Path(first).exists()  # 出力は置かない
+    assert _recorded_count(isolated_autocut_history) == 1  # 2 件目だけ記録
+    assert seen_stop == [False]  # 2 件目の特徴の計算は止まらない

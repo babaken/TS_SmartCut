@@ -139,3 +139,16 @@ def test_quality_is_close_to_lightgbm_with_the_same_settings():
     booster = lgb.train(params, lgb.Dataset(x, y, weight=w, categorical_feature=[4]), PARAMS["rounds"])
     theirs = _logloss(booster.predict(test_x), test_y)
     assert math.isfinite(ours) and ours <= theirs + 0.02
+
+
+
+@pytest.mark.parametrize("nodes, leaves", [
+    (["n 0 0 -2 num 0.5 0"], 2),  # 自分を指す
+    (["n 0 1 -1 num 0.5 0", "n 0 0 -2 num 0.5 0"], 3),  # 前の節を指す
+])
+def test_a_model_whose_branch_points_back_is_an_error(nodes, leaves):
+    # 壊れた DB のモデルで枝が前や自分を指すと、predict がいつまでも回りアプリが固まった(2026-11-17)
+    lines = ["ts_smartcut_gbdt 1", "features 1", "init 0.0", f"tree {len(nodes)} {leaves}", *nodes,
+             "l " + " ".join(["0.1"] * leaves)]
+    with pytest.raises(ValueError):
+        GbdtModel.from_text("\n".join(lines) + "\n")

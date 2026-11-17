@@ -66,10 +66,11 @@ def _caption(statement: bool) -> bytes:
     return bytes([0x80, 0xFF, 0xF0, group_id << 2, 0x00, 0x00, 0x10])
 
 
-def make_ts(path: Path) -> Path:
+def make_ts(path: Path, sfi_from_2s: int = 3) -> Path:
     """6 秒。0.1 秒ごとに映像・音声の PES。音声は 3〜5 秒が 5.1ch (6)、1.0 秒に
     1回だけヘッダに似た偽の値。字幕は 2.0 秒に字幕文、1.0・3.0 秒に管理データ。
-    4.0 秒の PMT で字幕の ES が無くなる(その後の字幕の PES は数えない)。"""
+    4.0 秒の PMT で字幕の ES が無くなる(その後の字幕の PES は数えない)。
+    sfi_from_2s: 2.0 秒からのサンプリング周波数(既定は変えない)。"""
     w = TsWriter()
     w.filler(2)
     for tick in range(60):
@@ -81,7 +82,7 @@ def make_ts(path: Path) -> Path:
         if tick == 10:
             channels, sfi = 7, 5  # 音声のデータの途中に見える偽のヘッダ(実録画の BS-A)
         else:
-            channels, sfi = (6 if 3.0 <= t < 5.0 else 2), 3
+            channels, sfi = (6 if 3.0 <= t < 5.0 else 2), (3 if t < 2.0 else sfi_from_2s)
         _pes(w, AUDIO_PID, 0xC0, t - 0.03, _adts(channels, sfi))
         if tick in (10, 20, 30, 45):
             _pes(w, CAPTION_PID, 0xBD, t, _caption(statement=tick in (20, 45)))
@@ -121,6 +122,24 @@ def test_scanner_accepts_data_split_anywhere(ts_path, piece):
     for i in range(0, len(data), piece):
         assert scanner.feed_bytes(data[i:i + piece]) is None
     _check(StreamEvents.from_native(*scanner.result(), complete=True))
+
+
+@pytest.mark.parametrize("piece", [1000, 188 * 7 + 5, 4000, 64 * 1024])
+def test_scanner_accepts_data_split_anywhere_after_a_resync(ts_path, piece):
+    """受信エラーでパケットの並びがずれた後も、どこで分けて渡しても同じ結果になる(前は同期を
+    取り直した後、渡したデータの区切りごとに 1 パケットずつ落ちた)。"""
+    data = ts_path.read_bytes()
+    broken = data[:188 * 20] + bytes(100) + data[188 * 20:]
+    scanner = native.StreamScanner(SERVICE_ID, VIDEO_START)
+    for i in range(0, len(broken), piece):
+        assert scanner.feed_bytes(broken[i:i + piece]) is None
+    _check(StreamEvents.from_native(*scanner.result(), complete=True))
+
+
+def test_channel_changes_after_a_sampling_rate_change(tmp_path):
+    # 2.0 秒でサンプリング周波数が変わった後のチャンネル数の変化(3.0 秒の 5.1ch)を捨てていた(2026-11-17)
+    path = make_ts(tmp_path / "rate.ts", sfi_from_2s=4)
+    _check(scan_stream_events(path, VIDEO_START, SERVICE_ID))
 
 
 def test_pts_wrap_is_handled(tmp_path):

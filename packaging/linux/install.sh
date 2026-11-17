@@ -74,6 +74,6 @@ fi
 if [ -n "$missing" ]; then
     echo
     echo "Not found:$missing"
-    echo "TS_SmartCut needs ffmpeg/ffprobe 8 or later (cutting and reading) and libmpv (the preview)."
+    echo "TS_SmartCut needs ffmpeg/ffprobe 6 or later (cutting and reading) and libmpv (the preview)."
     echo "Install them with your distribution's packages (for example: ffmpeg, mpv or libmpv2)."
 fi

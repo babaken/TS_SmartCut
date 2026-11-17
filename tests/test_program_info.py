@@ -352,6 +352,34 @@ def test_read_program_info_head_middle_and_tail(tmp_path):
     assert [s.pid for s in info.programme_streams] == [VIDEO_PID, 0x110]  # 中ほどの PMT
 
 
+
+def test_program_info_found_after_reading_more(tmp_path):
+    # 先頭の 32MB に SI が無く、末尾の TOT も終わりから 32MB より前にある録画。読み足して見つける。
+    # 読んだ所を残して足りない分だけ読むようにした(2026-11-17)。区切りは TS のパケットと合わない。
+    # 先頭は 64MB まで読むので、末尾の TOT はその外(中ほどの 33MB の後)に置く
+    head_filler = 33 * 1024 * 1024 // 188
+    w = TsWriter()
+    w.filler(head_filler)
+    w.pcr(0)
+    w.sections(0x0000, pat())
+    w.sections(PMT_PID, pmt())
+    w.sections(0x0011, sdt())
+    w.sections(0x0012, eit(0, event(*PREV, "PREV", "prev text")),
+               eit(1, event(*TARGET, "TARGET", "target text", [("Cast", "A/B"), ("Story", "s1")])))
+    w.sections(0x0014, tot(REC_START + timedelta(seconds=5)))
+    w.filler(33 * 1024 * 1024 // 188)
+    w.pcr(90 * 27_000_000)
+    w.sections(0x0014, tot(REC_START + timedelta(seconds=95)))
+    w.pcr(90 * 27_000_000)
+    w.filler(head_filler)
+    path = w.write(tmp_path / "late_si.ts")
+    assert path.stat().st_size > 96 * 1024 * 1024
+    info = read_program_info(path)
+    assert info is not None and info.event is not None and info.event.name == "TARGET"
+    assert info.recording_start is not None and info.recording_end is not None
+    assert (info.recording_end - info.recording_start).total_seconds() > 80
+
+
 def test_not_a_ts(tmp_path):
     path = tmp_path / "x.ts"
     path.write_bytes(b"\x00" * 10000)

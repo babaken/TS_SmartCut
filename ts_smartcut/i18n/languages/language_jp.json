@@ -96,7 +96,7 @@
       "history_db_error": "自動カットの記録 DB を開けません。\n[{code}] {message}\n\nカットの記録と特徴の計算は行いません（カット処理はこれまでどおり使えます）。",
       "file_not_found": "ファイルが見つかりません: {path}",
       "ffmpeg_old_title": "ffmpeg が古い",
-      "ffmpeg_old": "ffmpeg {version} が使われています。TS_SmartCut には ffmpeg {required} 以降が必要です。\n古い版では、インターレースの H.264 の再エンコードが灰色の絵になる、コピーの進み具合が動かない、などが起こります。新しい ffmpeg を入れてください。",
+      "ffmpeg_old": "ffmpeg {version} が使われています。TS_SmartCut には ffmpeg {required} 以降が必要です。\n古い版では、自動カット案の計算ができず、カットも正確になりません。新しい ffmpeg を入れてください。",
       "mpv_unavailable_title": "mpvが利用できません",
       "mpv_unavailable_missing": "mpv/libmpvが見つからないため、プレビュー再生は制限されます。\nカット編集機能自体は引き続き使用できます。",
       "mpv_unavailable_failed": "mpvへの接続に失敗したため、プレビュー再生は制限されます。\nカット編集機能自体は引き続き使用できます。",

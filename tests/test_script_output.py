@@ -363,7 +363,7 @@ def test_cancel_removes_the_claimed_files(noise_ts, tmp_path):
     manager.add_item(info, output_format=so.OUTPUT_VPY, output_path=tmp_path / "cut.vpy")
     original = ffmpeg.run
 
-    def cancel_then_run(args, progress_callback=None):
+    def cancel_then_run(args, progress_callback=None, bytes_per_frame=None):
         manager.cancel()
         return original(args, progress_callback)
 

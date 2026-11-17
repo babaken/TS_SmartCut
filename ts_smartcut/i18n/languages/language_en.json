@@ -96,7 +96,7 @@
       "history_db_error": "Cannot open the auto-cut history database.\n[{code}] {message}\n\nCuts will not be recorded and features will not be computed (cut processing still works).",
       "file_not_found": "File not found: {path}",
       "ffmpeg_old_title": "ffmpeg is too old",
-      "ffmpeg_old": "ffmpeg {version} is in use. TS_SmartCut needs ffmpeg {required} or later.\nWith older versions, interlaced H.264 re-encodes as gray pictures and stream copy shows no progress, among other problems. Install a newer ffmpeg.",
+      "ffmpeg_old": "ffmpeg {version} is in use. TS_SmartCut needs ffmpeg {required} or later.\nWith older versions, the auto-cut proposals cannot be computed and cuts are not exact. Install a newer ffmpeg.",
       "mpv_unavailable_title": "mpv Unavailable",
       "mpv_unavailable_missing": "mpv/libmpv could not be found, so preview playback is limited.\nCut editing itself remains fully usable.",
       "mpv_unavailable_failed": "Failed to connect to mpv, so preview playback is limited.\nCut editing itself remains fully usable.",

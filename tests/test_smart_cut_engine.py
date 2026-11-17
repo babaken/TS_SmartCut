@@ -111,6 +111,10 @@ def test_smart_cut_removes_middle_segment(engine, ffmpeg, sample_video, tmp_path
     # 残す区間: [0,30) + [45,75) = 60フレーム、フレーム精度で一致するはず
     assert out_info.total_frames == 60
     assert any(e.phase in ("Head", "Body", "Tail") for e in events)
+    # コピー(Body)とつなぎ合わせ(Concat)でも進み具合が進む(ffmpeg 6.x は frame= を出さず、
+    # 書いた大きさから見積もる)
+    assert any(e.phase == "Body" and e.phase_progress > 0 for e in events)
+    assert any(e.phase == "Concat" and e.phase_progress > 0 for e in events)
 
 
 def test_join_works_in_folders_with_quotes_and_symbols(ffmpeg, settings, sample_video, tmp_path):
@@ -297,7 +301,7 @@ def _capture_reencode_args(engine, ffmpeg, monkeypatch):
     captured = []
     original_run = ffmpeg.run
 
-    def _spy_run(args, progress_callback=None):
+    def _spy_run(args, progress_callback=None, bytes_per_frame=None):
         if "-c:v" in args:
             captured.append(args)
         return original_run(args, progress_callback=progress_callback)
@@ -370,7 +374,7 @@ def test_smart_cut_gpu_encoder_gets_bitrate_but_no_preset(
     monkeypatch.setattr(engine, "_select_video_encoder", lambda video_codec: "mpeg2_qsv")
 
     captured = []
-    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None: captured.append(args))
+    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None, bytes_per_frame=None: captured.append(args))
 
     part = SegmentPart("reencode", "Head", 0, 5)
     engine._render_part(
@@ -423,7 +427,7 @@ def test_gpu_encoder_gets_quality_args_when_bitrate_unknown(
     file_info.bitrate = 0
     monkeypatch.setattr(engine, "_select_video_encoder", lambda video_codec: encoder)
     captured = []
-    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None: captured.append(args))
+    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None, bytes_per_frame=None: captured.append(args))
 
     engine._render_part(
         file_info, SegmentPart("reencode", "Reencode", 0, 5), sample_video.parent / "gpu_q.mp4",
@@ -444,7 +448,7 @@ def test_vaapi_part_has_device_before_input_and_upload_filter(engine, ffmpeg, sa
     file_info = ffmpeg.get_file_info(sample_video)
     monkeypatch.setattr(engine, "_select_video_encoder", lambda video_codec: "h264_vaapi")
     captured = []
-    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None: captured.append(args))
+    monkeypatch.setattr(ffmpeg, "run", lambda args, progress_callback=None, bytes_per_frame=None: captured.append(args))
 
     engine._render_part(
         file_info, SegmentPart("reencode", "Head", 0, 5), sample_video.parent / "vaapi.mp4",
@@ -502,3 +506,14 @@ def test_gpu_used_only_when_it_can_encode_the_needed_scan(engine):
     engine._timing = SourceTiming(1.4, 1.4, "progressive", True, 0.032)
     assert engine._select_video_encoder("libx264") == "h264_vaapi"
     assert engine._select_video_encoder("mpeg2video") == "mpeg2video"
+
+
+def test_gpu_probe_filters_match_the_field_filter(engine):
+    # GPU の判定の試し(gpu.interlaced_probe_filters)は、実際の H.264 の再エンコードと同じフィルターを通す
+    from ts_smartcut.ffmpeg.gpu import interlaced_probe_filters
+    from ts_smartcut.ffmpeg.wrapper import SourceTiming
+
+    engine._timing = SourceTiming(1.4, 1.4, "tt", True, 0.032)
+    real = [f.split("=")[0] for f in engine._field_filter(30000 / 1001).split(",")]
+    probe = [f.split("=")[0] for f in interlaced_probe_filters("h264_nvenc")]
+    assert probe == real

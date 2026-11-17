@@ -96,7 +96,7 @@ def test_keyframe_cache_name_is_short_for_long_japanese_names(tmp_path, monkeypa
     """Linux はファイル名が 255 バイトまで。長い番組名でも超えない。"""
     monkeypatch.setattr(wrapper_module, "keyframe_cache_dir", lambda: tmp_path)
     # Linux で作れる最長に近い名前(237 バイト)。そのまま使うとキャッシュ名は 255 バイトを超える
-    video = tmp_path / ("名探偵コナン" * 13 + ".ts")
+    video = tmp_path / ("試験用の録画" * 13 + ".ts")
     video.write_bytes(b"x")
     path = wrapper_module._keyframe_cache_path(video, video.stat())
     assert len(path.name.encode("utf-8")) <= 255
@@ -167,14 +167,54 @@ def test_run_raises_mux_failed_error_on_nonzero_exit(wrapper):
 def test_run_success_with_progress_callback(wrapper, sample_video, tmp_path):
     output = tmp_path / "out.mp4"
     progresses = []
+    info = wrapper.get_file_info(sample_video)
     wrapper.run(
         ["-y", "-i", str(sample_video), "-t", "1", "-c", "copy", str(output)],
         progress_callback=progresses.append,
+        bytes_per_frame=info.bitrate / 8 / info.fps,
     )
     assert output.exists()
-    # 出力済みの映像フレーム数(25fps・1秒。コピーなので切れ目のパケットまで)
+    # 出力済みの映像フレーム数(25fps・1秒。コピーなので切れ目のパケットまで)。
+    # ffmpeg 6.x はコピーで frame= を出さず、書いた大きさからの見積もりになる(幅を広く取る)
     assert progresses and progresses == sorted(progresses)
-    assert 25 <= progresses[-1] <= 30
+    assert 15 <= progresses[-1] <= 40
+
+
+def _fake_process(stderr_text: str):
+    import io
+    import types
+
+    return types.SimpleNamespace(stderr=io.StringIO(stderr_text))
+
+
+# ffmpeg のコピーの時の進み具合の行(2026-11-16、各版で実測)
+_STATS_5_7_8 = "frame=  600 fps=0.0 q=-1.0 size=   36322kB time=00:00:00.00 bitrate=N/A speed=N/A\n" \
+               "frame= 1159 fps=0.0 q=-1.0 Lsize=   72644KiB time=00:00:00.00 bitrate=N/A speed=   0x\n"
+_STATS_6 = "size=       0kB time=N/A bitrate=N/A speed=N/A\n" \
+           "size=   36322kB time=00:00:00.00 bitrate=N/A speed=N/A\n" \
+           "size=   72644kB time=00:00:00.00 bitrate=N/A speed=   0x\n"
+
+
+def test_progress_reads_frames_when_ffmpeg_prints_them(wrapper):
+    frames = []
+    tail = wrapper._monitor_progress(_fake_process("Input #0\n" + _STATS_5_7_8), frames.append, 64000.0)
+    assert frames == [600, 1159]  # frame= があれば大きさは使わない
+    assert tail == "Input #0\n"
+
+
+def test_progress_estimates_frames_from_size_for_ffmpeg_6_copy(wrapper):
+    # ffmpeg 6.x はコピーで frame= を出さない。1 フレーム 64000 バイトとして大きさから見積もる
+    frames = []
+    tail = wrapper._monitor_progress(_fake_process("Input #0\n" + _STATS_6), frames.append, 64000.0)
+    assert frames == [0, 36322 * 1024 // 64000, 72644 * 1024 // 64000]
+    assert frames == sorted(frames)
+    assert tail == "Input #0\n"  # 進み具合の行は失敗の説明に残さない
+
+
+def test_progress_without_frame_size_ignores_size_lines(wrapper):
+    frames = []
+    wrapper._monitor_progress(_fake_process(_STATS_6), frames.append)
+    assert frames == []
 
 
 def test_failure_keeps_ffmpeg_message_when_progress_is_read(wrapper, tmp_path):
@@ -260,6 +300,51 @@ def test_get_leading_picture_count(tmp_path, codec_args, expected):
     keyframe_pts = timing.video_start + 30 / fps
 
     assert len(wrapper.get_leading_pictures(source, keyframe_pts, fps)) == expected
+
+
+def test_field_pictures_are_merged_into_frames():
+    # 1 フレームを 2 つのフィールドの絵(別々のパケット)で書く H.264 の録画(2026-11-17)。2 つ目のフィールドの
+    # 時刻はちょうど次のフレームの境目に当たり、区間の境目がそこに来ていた
+    from ts_smartcut.ffmpeg.wrapper import merge_field_pictures
+
+    fps = 30000 / 1001
+    field = 1 / (2 * fps)
+    # デコード順: I(2 フィールド), P(2), B(2), B(2)
+    packets = []
+    for frame, key in ((0, True), (3, False), (1, False), (2, False)):
+        pts = 10 + frame * 2 * field
+        packets += [(pts, field, key), (pts + field, field, False)]
+    merged = merge_field_pictures(packets, fps)
+    assert merged == [
+        (10 + frame * 2 * field, 2 * field, frame == 0) for frame in (0, 3, 1, 2)
+    ]
+    # フレームのパケットはそのまま(59.94p の 1 フレームはフィールドの長さと同じだが、fps で区別する)
+    frames = [(10 + k / fps, 1 / fps, k == 0) for k in range(4)]
+    assert merge_field_pictures(frames, fps) == frames
+    p59 = [(10 + k / (2 * fps), 1 / (2 * fps), k == 0) for k in range(4)]
+    assert merge_field_pictures(p59, 2 * fps) == p59
+    # 長さの分からないパケットはまとめない
+    unknown = [(10.0, 0.0, True), (10.0 + field, 0.0, False)]
+    assert merge_field_pictures(unknown, fps) == unknown
+
+
+def test_stream_packets_count_field_pictures_as_one_frame(monkeypatch, tmp_path):
+    # スクリプトの出力は「表示の順に何番目の絵か」で区間を書く。L-SMASH Works はフィールドの絵 2 枚を
+    # 1 フレームと数えた(2026-11-17、フィールドで書かれた H.264 の録画)。音声はまとめない
+    import subprocess
+
+    field = 1001 / 60000
+    lines = []
+    for frame in (0, 2, 1):  # デコード順(I, P, B)
+        pts = 1 + frame * 2 * field
+        lines += [f"0,{pts:.6f},{field:.6f}", f"1,{pts:.6f},{field:.6f}", f"0,{pts + field:.6f},{field:.6f}"]
+    output = "\n".join(lines).encode()
+    monkeypatch.setattr(wrapper_module, "run_until_stalled",
+                        lambda cmd, seconds, cancel_event=None: subprocess.CompletedProcess(cmd, 0, output, b""))
+    packets = FFmpegWrapper().get_stream_packets(tmp_path / "x.ts", [0, 1], frame_rates={0: 30000 / 1001})
+    assert [round(pts, 4) for pts, _ in packets[0]] == [round(1 + k * 2 * field, 4) for k in range(3)]
+    assert all(duration == pytest.approx(2 * field, abs=1e-6) for _, duration in packets[0])
+    assert len(packets[1]) == 3
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="生バイトのファイル名はPOSIXのみで作れる")

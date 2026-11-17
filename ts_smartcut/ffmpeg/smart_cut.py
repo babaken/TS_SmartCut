@@ -31,6 +31,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, NamedTuple, Optional, Tuple
 
 from ts_smartcut.errors import MuxFailedError, UnsupportedCodecError, ValidationError
+from ts_smartcut.ffmpeg.compat import bytes_per_frame, x264_rate_args
 from ts_smartcut.ffmpeg.gpu import (
     HardwareDetection,
     choose_encoder,
@@ -297,6 +298,11 @@ def contiguous_runs(parts: List[SegmentPart]) -> List[Tuple[int, int]]:
 _AUDIO_PROBE_ARGS = ["-analyzeduration", "30M", "-probesize", "100M"]
 
 
+def _bytes_per_frame(file_info: FileCutInfo) -> Optional[float]:
+    """frame= を出さない ffmpeg(6.x のコピー)の進み具合の見積もりに使う大きさ(compat.py)。"""
+    return bytes_per_frame(file_info.bitrate, file_info.fps)
+
+
 def audio_input(file_info: FileCutInfo) -> Tuple[List[str], str]:
     """音声を切り出す ffmpeg の (読み取りの指定, -map)。出力に入れるのは選んだ音声だけ(§4.12)。
     最初の音声(何も選んでいない時も)は今までどおり 0:a:0、ほかは PID で選び読み取り幅を広げる。"""
@@ -453,6 +459,7 @@ class SmartCutEngine:
                     file_info, audio_runs, ".nut", audio_codec, len(parts), total_steps, progress_callback,
                 )
 
+            self._continue_copied_order(file_info, parts, video_files)
             self._fit_decode_times(file_info, parts, video_files)
             self._join(
                 file_info, video_files, audio_files, output_path, total_steps, progress_callback,
@@ -472,8 +479,9 @@ class SmartCutEngine:
             return self._encoder_cache[video_codec]
         family = _SW_ENCODER_TO_FAMILY.get(video_codec, "h264")
         interlaced = self._output_interlaced()
-        encoder = choose_encoder(self.hardware, family, interlaced)
+        # GPU が使えるかは判定(ffmpeg/gpu.py)で、入っている ffmpeg に実際の処理と同じ指定を試して決めてある
         gpu = choose_hardware(self.hardware, family, interlaced)
+        encoder = choose_encoder(self.hardware, family, interlaced)
         if gpu is not None:
             logger.info("Using hardware encoder: %s (%s)", encoder, gpu.label_in(english))
         self._encoder_cache[video_codec] = encoder
@@ -545,7 +553,7 @@ class SmartCutEngine:
         else:
             threshold = self._abs_time(frame - 0.5, fps)
             packets = self.ffmpeg.get_video_packet_times(
-                file_info.file_path, threshold - 3.0, threshold + 3.0
+                file_info.file_path, threshold - 3.0, threshold + 3.0, fps=fps
             )
             later = [pts for pts, _ in packets if pts >= threshold - 1e-6]
             value = later[0] if later else self._end_of_video(file_info)
@@ -558,7 +566,7 @@ class SmartCutEngine:
             format_start = self._timing.format_start if self._timing else 0.0
             tail_start = format_start + file_info.duration - 6.0
             packets = self.ffmpeg.get_video_packet_times(
-                file_info.file_path, tail_start, format_start + file_info.duration + 6.0
+                file_info.file_path, tail_start, format_start + file_info.duration + 6.0, fps=file_info.fps
             )
             if packets:
                 pts, duration = packets[-1]
@@ -675,6 +683,9 @@ class SmartCutEngine:
                 "-fps_mode", "passthrough",
                 "-c:v", encoder,
             ]
+            if field_filter and encoder == "libx264":
+                # ffmpeg 7.x の灰色の絵を避ける(compat.py)
+                tail += x264_rate_args(fps)
             if self._output_interlaced():
                 # 元がインターレースなら再エンコード部分もインターレース(フィールド)
                 # 符号化にする。フィールド順は入力フレームの情報が引き継がれる。
@@ -694,7 +705,7 @@ class SmartCutEngine:
         args.append(str(out_path))
         self.ffmpeg.run(args, progress_callback=self._progress(
             part.phase, index, total, progress_callback, [(part.start_frame, part.end_frame)],
-        ))
+        ), bytes_per_frame=_bytes_per_frame(file_info))
 
     def _rate_args(self, encoder: str, file_info: FileCutInfo) -> List[str]:
         """画質は元ソースに合わせる(利用者が選ぶ設定はない)。"""
@@ -865,6 +876,44 @@ class SmartCutEngine:
         except ValueError as e:
             raise MuxFailedError("E101", key="exceptions.field_rewrite_failed", error=e)
 
+    # ---- つなぎ目の H.264 の絵の順番 ----------------------------------------------------
+
+    def _continue_copied_order(
+        self, file_info: FileCutInfo, parts: List[SegmentPart], video_files: List[Tuple[Path, float]]
+    ) -> None:
+        """H.264 のコピーの部分の POC を、前の部分(Head やコピー)に続くよう書き換える(native/src/h264.rs)。
+
+        放送の H.264 はキーフレームが IDR でない I のことが多く、前の部分の後ろにつなぐと、I の下位の値に
+        よっては I の POC が前の部分より前になり、ffmpeg のデコーダーが後ろの B フレームを約 20 秒にわたって
+        捨てた(Smart Cut で約 150 枚、Simple Copy で 89 枚。テスト動画 2 本、2026-11-17)。書き換えられない時
+        (ts_smartcut_native が無い等)は、警告を残してそのままつなぐ。"""
+        if file_info.video_codec != "h264" or not any(p.action == "copy" for p in parts[1:]):
+            return
+        from ts_smartcut.autocut.native import NativeModuleError, native_module
+
+        try:
+            native = native_module()
+        except NativeModuleError as e:
+            logger.warning("Cannot continue the H.264 picture order at joins, B-frames after them may not play: %s",
+                           e.log_message)
+            return
+        for index in range(1, len(parts)):
+            if parts[index].action != "copy":
+                continue
+            previous, path = video_files[index - 1][0], video_files[index][0]
+            try:
+                tail = native.h264_tail_order(str(previous))
+                if tail is None:
+                    logger.warning("The part before %s has no picture order to continue", path.name)
+                    continue
+                _, last_lsb, ahead = tail
+                added = native.h264_continue_order(str(path), last_lsb, ahead)
+            except ValueError as e:
+                logger.warning("Could not continue the H.264 picture order into %s: %s", path.name, e)
+                continue
+            if added is not None:
+                logger.info("Continued the H.264 picture order into %s (+%d)", path.name, added)
+
     # ---- つなぎ目のデコード時刻 -------------------------------------------------
 
     def _fit_decode_times(
@@ -950,7 +999,16 @@ class SmartCutEngine:
                 prev_last = prev["last_dts"] - prev["duration"]
                 max_start = pts[0] - prev_last - frame
 
-            new_start = max(0.0, min(max(need_end, lag_start), max_start))
+            steps = len(pts) - 1
+            min_step = min((b - a for a, b in zip(pts, pts[1:])), default=frame)
+            start_needed = need_end
+            if steps and max_start == math.inf:
+                # 前も調整できる部分なら、前倒しの一部は自分の中で受け持つ(1段ごとにデコード時刻の
+                # 間隔が1フィールド以上残る分まで)。全部を先頭のずれにすると前の短いTailに押し付け、
+                # そこでデコード時刻が1フィールド未満に詰まった(フィールドで書かれたH.264のBodyは
+                # 先頭のデコードが5フィールド早い。実録画、2026-11-17)
+                start_needed = need_end - steps * max(0.0, min_step - frame / 2) * 0.9
+            new_start = max(0.0, min(max(start_needed, lag_start), max_start))
             if lag_start - frame * 0.1 <= new_start < lag_start:
                 # 前のcopy部分との1フレームの間隔にわずかに足りないだけなら元のまま
                 # にして末尾側の前倒しは行う(0.1ms足りないだけで調整を丸ごと諦め、
@@ -963,9 +1021,7 @@ class SmartCutEngine:
                 )
                 continue
             new_end = max(need_end, new_start)
-            steps = len(pts) - 1
             if steps:
-                min_step = min(b - a for a, b in zip(pts, pts[1:]))
                 if (new_end - new_start) / steps >= min_step:
                     logger.warning("Cannot move the decode times at a join early enough: %s", video_files[i][0].name)
                     new_end = new_start + min_step * 0.9 * steps
@@ -1119,7 +1175,8 @@ class SmartCutEngine:
             # 時刻がずれるため、音声フレームごとにPESを分ける。
             args += ["-pes_payload_size", "0"]
         args.append(str(output_path))
-        self.ffmpeg.run(args, progress_callback=self._progress("Concat", total - 1, total, progress_callback, spans))
+        self.ffmpeg.run(args, progress_callback=self._progress("Concat", total - 1, total, progress_callback, spans),
+                        bytes_per_frame=_bytes_per_frame(file_info))
 
     @staticmethod
     def _progress(

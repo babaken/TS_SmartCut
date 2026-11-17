@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::ts::{OutOfRange, SectionAssembler, Stream, VIDEO_STREAM_TYPES, detect_packet_size, packet_array, parse_pat, parse_pmt};
+use crate::ts::{OutOfRange, SectionAssembler, Stream, TS_PACKET_SIZE, VIDEO_STREAM_TYPES, detect_packet_size, parse_pat, parse_pmt, split_packets};
 
 // パケットの大きさを判定するのに見る量 (stream_events.CHUNK_SIZE)
 const DETECT_SIZE: usize = 32 * 1024 * 1024;
@@ -85,6 +85,8 @@ fn data_from(payload: &[u8], start: usize, len: Option<usize>) -> &[u8] {
 pub struct Scanner {
     packet_size: Option<usize>,
     rest: Vec<u8>,
+    /// rest の先頭がパケットの並びの続きか (false なら同期を探し直す)
+    rest_aligned: bool,
     service_id: Option<u16>,
     video_start_ticks: i64,
     assemblers: HashMap<u16, SectionAssembler>,
@@ -109,6 +111,7 @@ impl Scanner {
         Scanner {
             packet_size: None,
             rest: Vec::new(),
+            rest_aligned: false,
             service_id,
             // 偶数への丸め (Python の round と同じ。記録した特徴と揃える)
             video_start_ticks: (video_start * 90000.0).round_ties_even() as i64,
@@ -178,7 +181,23 @@ impl Scanner {
             }
             return;
         };
-        if Some(rate) != self.rate || channels == current {
+        if Some(rate) != self.rate {
+            // サンプリング周波数かプロファイルが変わった: 同じ値が 2 回続けば、その値で測り直す。
+            // 以前は最初の値のままで、変わった後のチャンネル数の変化をすべて捨てていた(2026-11-17)
+            if self.pending == Some((rate, channels)) {
+                self.rate = Some(rate);
+                if channels != current {
+                    self.channels = Some(channels);
+                    self.audio_channels.push((self.pending_time, channels));
+                }
+                self.pending = None;
+            } else {
+                self.pending = Some((rate, channels));
+                self.pending_time = when;
+            }
+            return;
+        }
+        if channels == current {
             self.pending = None;
             return;
         }
@@ -254,25 +273,34 @@ impl Scanner {
         let mut buf = std::mem::take(&mut self.rest);
         buf.extend_from_slice(data);
         let mut start = 0;
+        let mut aligned = self.rest_aligned;
         if self.packet_size.is_none() {
-            match detect_packet_size(&buf[..buf.len().min(DETECT_SIZE)]) {
-                None => {
+            // detect_packet_size は頭の 4 パケット分だけを探すので、無ければその分を飛ばして探し直す
+            // (前は見つからないとデータの終わりの 8 パケット分だけを残し、頭がごみだと読んだ分を
+            // ほとんど捨てた。渡し方で結果が変わった)
+            let mut skip = 0;
+            loop {
+                let window = &buf[skip..];
+                if window.len() < 192 * 8 {
                     // TS の始まりが見つかるまで待つ
-                    self.rest = buf[buf.len().saturating_sub(192 * 8)..].to_vec();
+                    self.rest = window.to_vec();
                     return Ok(());
                 }
-                Some((size, s)) => {
+                if let Some((size, s)) = detect_packet_size(&window[..window.len().min(DETECT_SIZE)]) {
                     self.packet_size = Some(size);
-                    start = s;
+                    start = skip + s;
+                    aligned = true;
+                    break;
                 }
+                skip += TS_PACKET_SIZE * 4;
             }
         }
         let size = self.packet_size.unwrap();
-        let usable = (buf.len() - start) / size * size;
-        self.rest = buf[start + usable..].to_vec();
-        if usable > 0 {
-            let packets = packet_array(&buf[start..start + usable], size);
-            self.feed(&packets)?;
+        let split = split_packets(&buf[start..], size, aligned, false);
+        self.rest = buf[start + split.end..].to_vec();
+        self.rest_aligned = split.end_aligned;
+        if !split.packets.is_empty() {
+            self.feed(&split.packets)?;
         }
         Ok(())
     }

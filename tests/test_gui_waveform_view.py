@@ -12,6 +12,11 @@ from ts_smartcut.models import CutRange
 FPS = 30.0
 
 
+def _grab(widget):
+    """論理座標で色を読める画像。拡大率 200% の画面では grab() が 2 倍の大きさになる。"""
+    return widget.grab().toImage().scaled(widget.size())
+
+
 def _view(qapp, peaks, offset=0.0):
     view = WaveformView()
     view.resize(400, 64)
@@ -89,9 +94,9 @@ def test_only_outside_the_keep_ranges_is_shaded(qapp):
     view.resize(400, 64)
     view.set_envelope(None, FPS)
     view.set_current_frame(int(10 * FPS))
-    background = view.grab().toImage().pixelColor(50, 5)
+    background = _grab(view).pixelColor(50, 5)
     view.set_cuts([CutRange(150, 300)])
-    image = view.grab().toImage()
+    image = _grab(view)
     assert image.pixelColor(150, 5) == background  # 7.5秒: 残す
     assert image.pixelColor(50, 5) != background   # 2.5秒: 消える
     assert image.pixelColor(350, 5) != background  # 17.5秒: 消える

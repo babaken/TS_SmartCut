@@ -29,10 +29,17 @@ jobs:
 
   tests:
     if: github.repository == 'babaken/TS_SmartCut'
+    # The names stay "tests (<os>)" for the usual jobs (the branch protection requires them)
+    name: tests (${{ matrix.os }}${{ matrix.ffmpeg == '6.1' && ', ffmpeg 6.1' || '' }})
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest, ubuntu-24.04]
+        ffmpeg: [usual]
+        include:
+          # The oldest supported ffmpeg: Ubuntu 24.04's own package
+          - os: ubuntu-24.04
+            ffmpeg: "6.1"
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     steps:
@@ -42,8 +49,8 @@ jobs:
           python-version: "3.14"
 
       # ffmpeg, ffprobe, mpv and libmpv are not Python packages; the tests use the real ones.
-      # ffmpeg: Linux tests the oldest supported version (8.1; 7.x re-encodes interlaced H.264 as gray pictures,
-      # Ubuntu 24.04's 6.1 reports no progress for stream copy), Windows the newest.
+      # ffmpeg: Linux tests 8.1 and the oldest supported version (Ubuntu 24.04's 6.1, which prints no
+      # frame= for stream copy), Windows the newest.
       - name: mpv, libmpv, Qt's libraries and a virtual display (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -52,8 +59,11 @@ jobs:
             libegl1 libgl1 libgl1-mesa-dri libxkbcommon0 libxkbcommon-x11-0 libdbus-1-3 libfontconfig1 \
             libxcb-cursor0 libxcb-icccm4 libxcb-keysyms1 libxcb-shape0 libxcb-xinerama0 libxcb-randr0 \
             libxcb-render-util0 libxcb-image0 libxcb-xfixes0
+      - name: ffmpeg 6.1 (Ubuntu's package)
+        if: matrix.ffmpeg == '6.1'
+        run: sudo apt-get install -y --no-install-recommends ffmpeg
       - name: ffmpeg 8.1 (Linux)
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && matrix.ffmpeg != '6.1'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

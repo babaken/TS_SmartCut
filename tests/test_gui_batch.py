@@ -31,12 +31,18 @@ def test_add_duplicate_item_returns_false(qapp, batch_manager):
     assert view.tree.topLevelItemCount() == 1
 
 
+def _wait_for_batch(batch_manager):
+    # 5 秒では重い時に間に合わず、終わる前の表示を見て失敗した(2026-11-16)
+    batch_manager.thread.join(timeout=60)
+    assert not batch_manager.thread.is_alive(), "the batch did not finish"
+
+
 def test_start_processes_and_status_reflected(qapp, batch_manager):
     view = BatchListView(batch_manager)
     view.add_item(_file_info("a"))
 
     view.start()
-    batch_manager.thread.join(timeout=5)
+    _wait_for_batch(batch_manager)
     view._refresh_list()  # ポーリングタイマーを待たず即時反映して確認
 
     assert view.tree.topLevelItem(0).text(5) == "Done"
@@ -204,7 +210,7 @@ def test_title_shows_the_count_and_progress(qapp, batch_manager):
     assert titles[-1] == "バッチリスト (2)"
     view.start()
     assert view.title().startswith("バッチリスト (") and "/2)" in view.title()
-    batch_manager.thread.join(timeout=5)
+    _wait_for_batch(batch_manager)
     view._refresh_list()
     assert titles[-1] == "バッチリスト (2)"
 
@@ -234,7 +240,7 @@ def test_finished_batch_shows_a_summary_instead_of_the_last_progress(qapp, batch
     view.add_item(_file_info("a"))
     view.add_item(_file_info("b"))
     view.start()
-    batch_manager.thread.join(timeout=5)
+    _wait_for_batch(batch_manager)
     qapp.processEvents()  # 本当の進捗を先に届けてから、最後の進捗を差し替える
     view._on_progress(ProcessProgress(current_file=2, total_files=2, current_phase="Features",
                                       progress_percent=82.0, elapsed_time=847.0, estimated_remaining=0.0))

@@ -63,14 +63,27 @@ def test_old_ffmpeg_is_reported_after_start(qapp, monkeypatch):
 
     shown = []
     monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: shown.append((parent, text)))
-    monkeypatch.setattr(DependencyChecker, "old_ffmpeg_version", staticmethod(lambda path=None: "7.1.5"))
+    monkeypatch.setattr(DependencyChecker, "old_ffmpeg_version", staticmethod(lambda path=None: "5.1.6"))
     window = QWidget()
     main_module._warn_if_old_ffmpeg(window, AppSettings())
     assert pump_events(qapp, lambda: shown)
-    assert shown[0][0] is window and "7.1.5" in shown[0][1] and "8" in shown[0][1]
+    assert shown[0][0] is window and "5.1.6" in shown[0][1] and "6" in shown[0][1]
 
     shown.clear()
     monkeypatch.setattr(DependencyChecker, "old_ffmpeg_version", staticmethod(lambda path=None: None))
     main_module._warn_if_old_ffmpeg(window, AppSettings())
     assert not pump_events(qapp, lambda: shown, timeout_ms=500)
     window.deleteLater()
+
+
+def test_main_guard_is_the_last_statement():
+    # 実行ファイル(PyInstaller)は main.py を直接動かす。`if __name__ == "__main__":` の後ろに置いた
+    # 関数は main() の時点でまだ無く、起動が NameError で落ちる(0.1.1 の配布前に見つけた)。
+    # テストは main を import して呼ぶので、この並びの誤りは他のテストでは分からない。
+    import ast
+    from pathlib import Path
+
+    tree = ast.parse(Path(main_module.__file__).read_text(encoding="utf-8"))
+    last = tree.body[-1]
+    assert isinstance(last, ast.If)
+    assert ast.unparse(last.test) == "__name__ == '__main__'"

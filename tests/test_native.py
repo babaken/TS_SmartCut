@@ -26,7 +26,9 @@ import json
 import subprocess
 import sys
 import threading
+import time
 import types
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -137,24 +139,27 @@ def test_scanner_on_data_that_is_not_ts():
     assert not failed
 
 
-# 削る前の Python の解析が、下の壊れたデータ (種 0〜39) で出した結果の要約
+# 下の壊れたデータ (種 0〜39) の結果の要約。削る前の Python の解析から取り、2026-11-16 に種 4・5・11・
+# 13・14・17・26・32・38 を直した。前の解析は、同期を取り直した後に渡したデータの区切りごとに 1 パケット
+# 落とし、頭がごみの時はそのデータをほとんど捨てていた (渡し方で結果が変わった)。直した値は、一度に
+# 渡した時と同じ
 DAMAGED_DIGESTS = [
     '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2',
-    'bf19630e1c89bd57', 'b593a641b7b65193', '54145590b1cf2eb2', '54145590b1cf2eb2',
-    '54145590b1cf2eb2', 'c08c721a77df68e6', 'd88917a558d72ead', '7c86c8d79fa3d77b',
-    '54145590b1cf2eb2', '8439395cd33a5d85', '80e04f76f64731b7', '428f619667f07acc',
-    '54145590b1cf2eb2', '0534d77fca08d728', '54145590b1cf2eb2', '54145590b1cf2eb2',
+    '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2',
+    '54145590b1cf2eb2', 'c08c721a77df68e6', 'd88917a558d72ead', 'd7077fa1a8c45f0b',
+    '54145590b1cf2eb2', '54145590b1cf2eb2', '9ccfad81dae15947', '428f619667f07acc',
+    '54145590b1cf2eb2', '3218ffb71a882cb2', '54145590b1cf2eb2', '54145590b1cf2eb2',
     '428f619667f07acc', '2ecd0973e85319b9', '6d2341433beab159', '428f619667f07acc',
-    '54145590b1cf2eb2', '54145590b1cf2eb2', '89485b07afd179be', '54145590b1cf2eb2',
+    '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2', '54145590b1cf2eb2',
     '54145590b1cf2eb2', '9ccfad81dae15947', '54145590b1cf2eb2', '89485b07afd179be',
-    '54145590b1cf2eb2', '351c6a84f60578d5', '54145590b1cf2eb2', '9ccfad81dae15947',
-    '54145590b1cf2eb2', '54145590b1cf2eb2', 'ea6eca3ca0756c0f', '54145590b1cf2eb2',
+    '428f619667f07acc', '351c6a84f60578d5', '54145590b1cf2eb2', '9ccfad81dae15947',
+    '54145590b1cf2eb2', '54145590b1cf2eb2', '9ccfad81dae15947', '54145590b1cf2eb2',
 ]
 
 
 @pytest.mark.parametrize("seed", range(40))
 def test_scanner_on_damaged_data(ts_data, seed):
-    """壊れたバイト・欠けたパケット(受信エラーの録画)でも、削る前の Python の解析と同じ結果・失敗の印。"""
+    """壊れたバイト・欠けたパケット(受信エラーの録画)でも、決まった結果・失敗の印。どう分けて渡しても同じ。"""
     rng = np.random.default_rng(seed)
     data = bytearray(ts_data)
     for pos in rng.integers(0, len(data), 60):
@@ -162,7 +167,10 @@ def test_scanner_on_damaged_data(ts_data, seed):
     for _ in range(5):
         cut = int(rng.integers(0, len(data) - 400))
         del data[cut:cut + int(rng.integers(1, 400))]
-    assert _digest(*_scan(bytes(data), int(rng.integers(500, 20000)))) == DAMAGED_DIGESTS[seed]
+    data = bytes(data)
+    assert _digest(*_scan(data, int(rng.integers(500, 20000)))) == DAMAGED_DIGESTS[seed]
+    for piece in (len(data), 1000, 188 * 16 + 1, 64 * 1024):
+        assert _digest(*_scan(data, piece)) == DAMAGED_DIGESTS[seed], piece
 
 
 # --- 特徴の計算 ----------------------------------------------------------------
@@ -352,6 +360,26 @@ def test_stopping_does_not_wait_for_the_next_frame(mpeg2_ts, monkeypatch):
     threading.Timer(0.2, stop.set).start()
     f = compute_features(mpeg2_ts, 29.97, [KeepRange(10, 70)], stop_event=stop)
     assert killed.is_set() and not f.complete
+
+
+@pytest.mark.skipif(not Path("/dev/full").exists(), reason="/dev/full (書くと必ず失敗するファイル) が要る")
+def test_a_failed_logo_write_is_not_complete(mpeg2_ts, monkeypatch):
+    """ロゴの一時ファイルが書けない(ディスクが一杯など)時は、止めた時と同じに途中まで(complete=False)
+    とし、待たずに終わる。前は終わりにまとめて書く分の失敗では計算済みになり、読み込みの途中で
+    失敗すると ffmpeg が誰も読まない出力に書こうとして止まり、60 秒待ってから終わった。
+    (途中の失敗は 8 MiB の書き込みの区切りで起きるので、この小さな録画では終わりの分を確かめる)"""
+    real = native.FeatureReader
+
+    def reader(*args, **kwargs):
+        args = list(args)
+        args[12] = "/dev/full"  # logo_path
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(native, "FeatureReader", reader)
+    started = time.monotonic()
+    f = compute_features(mpeg2_ts, 29.97, [KeepRange(10, 70)])
+    assert time.monotonic() - started < 30
+    assert not f.complete
 
 
 # --- 読み終わった後の計算 (native/src/post.rs) ---------------------------------------
@@ -964,3 +992,28 @@ def test_lgd_template_is_the_same_every_time(tmp_path):
     lgd = lgd_import.read_lgd(_box_lgd(tmp_path / "t.lgd"))[0]
     a, b = lgd_import.template_from_lgd(lgd), lgd_import.template_from_lgd(lgd)
     assert a.gx.tobytes() == b.gx.tobytes() and a.gy.tobytes() == b.gy.tobytes()
+
+
+
+def test_rule_recording_with_too_short_logo_scores_has_no_logo():
+    # 点数が隅の数より短い(幅 0)と chunks_exact(0) で異常終了した(2026-11-17、今の呼び出し側は防いでいる)
+    native = native_module()
+    for logo in (b"", b"\x01"):
+        native.RuleRecording(29.97, 100, 100.0, 0.0, bytes(1000), bytes(200), logo, 2)
+
+
+def test_program_info_does_not_keep_eits_read_before_the_pat_twice(tmp_path):
+    # PAT より前の EIT は、PAT を見つけて読み直す時にもう一度集めるので、二重に持っていた(2026-11-17)
+    from tests.test_program_info import PMT_PID, REC_START, TARGET, TsWriter, eit, event, pat, pmt, sdt, tot
+    from datetime import timedelta
+
+    w = TsWriter()
+    w.pcr(0)
+    w.sections(0x0012, eit(0, event(*TARGET, "TARGET", "target text")))
+    w.sections(0x0000, pat())
+    w.sections(PMT_PID, pmt())
+    w.sections(0x0011, sdt())
+    w.sections(0x0014, tot(REC_START + timedelta(seconds=5)))
+    w.pcr(27_000_000)
+    raw = native_module().read_program_info_raw(str(w.write(tmp_path / "eit_first.ts")))
+    assert len(raw["head_eits"]) == 1

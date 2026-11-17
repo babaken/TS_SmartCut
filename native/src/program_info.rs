@@ -341,6 +341,7 @@ impl Reader {
         let mut pids = vec![PID_PAT, PID_SDT, PID_EIT, PID_TOT];
         pids.extend(self.pat.iter().map(|p| p.1));
         let mut times = Vec::new();
+        let eits_before = self.eits.len();
         let mut assemblers: HashMap<u16, SectionAssembler> = HashMap::new();
         for (row, packet) in packets.iter().enumerate() {
             let pid = (((packet[1] & 0x1F) as u16) << 8) | packet[2] as u16;
@@ -354,6 +355,8 @@ impl Reader {
                         self.pat = parse_pat(&section);
                         // 番組の無い PAT では読み直さない (元の Python は読み直しを繰り返して止まらなかった)
                         if !self.pat.is_empty() {
+                            // PAT より前に読んだ EIT は読み直しでもう一度集めるので捨てる (二重に持っていた、2026-11-17)
+                            self.eits.truncate(eits_before);
                             return Collected::Again;
                         }
                     }
@@ -422,12 +425,16 @@ pub fn read_program_info(path: &Path) -> std::io::Result<Option<ProgramInfo>> {
     let mut reader = Reader::default();
 
     // 先頭: PAT・PMT・SDT・EIT と最初の時刻が揃うまで読む
+    // 足りなければ CHUNK_SIZE ずつ読み足す。読んだ所は残し、足した分だけ読む (以前は毎回先頭から読み直し、
+    // EIT・TOT の無い TS で先頭と末尾をそれぞれ 480 MiB 読んでいた、2026-11-17)。区切りは TS のパケットと
+    // 合わないので、つなげたデータを毎回初めから解析する (結果は一度に読んだ時と同じ)
     let mut head_len = 0;
     let mut head_data = Vec::new();
     let mut head_times = Vec::new();
     while head_len < size.min(MAX_EDGE_SIZE) {
-        head_len = size.min(head_len + CHUNK_SIZE);
-        head_data = read_at(&mut f, 0, head_len)?;
+        let new_len = size.min(head_len + CHUNK_SIZE);
+        head_data.extend_from_slice(&read_at(&mut f, head_len, new_len - head_len)?);
+        head_len = new_len;
         reader = Reader::default();
         head_times = reader.collect(&packet_array(&head_data, packet_size));
         let sid = reader.service_id();
@@ -468,8 +475,12 @@ pub fn read_program_info(path: &Path) -> std::io::Result<Option<ProgramInfo>> {
         let mut tail_data = Vec::new();
         let mut tail_times = Vec::new();
         while tail_len < (size - head_len).min(MAX_EDGE_SIZE) {
-            tail_len = (size - head_len).min(tail_len + CHUNK_SIZE);
-            tail_data = read_at(&mut f, size - tail_len, tail_len)?;
+            // 末尾は後ろから読み足す: 足した分を前につなげる
+            let new_len = (size - head_len).min(tail_len + CHUNK_SIZE);
+            let mut data = read_at(&mut f, size - new_len, new_len - tail_len)?;
+            data.extend_from_slice(&tail_data);
+            tail_data = data;
+            tail_len = new_len;
             reader.eits = Vec::new();
             tail_times = reader.collect(&packet_array(&tail_data, packet_size));
             if !tail_times.is_empty() {

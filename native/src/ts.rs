@@ -60,20 +60,50 @@ pub fn detect_packet_size(data: &[u8]) -> Option<(usize, usize)> {
 
 /// データを 188 バイトのパケットに分ける。同期がずれた所は取り直す
 pub fn packet_array(data: &[u8], packet_size: usize) -> Vec<&[u8]> {
+    split_packets(data, packet_size, false, true).packets
+}
+
+/// 続きのデータを分けた結果
+pub struct Split<'a> {
+    pub packets: Vec<&'a [u8]>,
+    /// 使い終わった位置。ここから後ろ (最後のパケットの途中など) は、続きのデータと合わせて分け直す
+    pub end: usize,
+    /// end がパケットの並びの続き (最後のパケットのすぐ後ろ) か。false なら、続きは同期を探し直す
+    pub end_aligned: bool,
+}
+
+/// データを分ける (録画を少しずつ読む時用)。aligned はデータの先頭がパケットの並びの続きか。
+/// last でない時、同期を取り直した位置の後ろに確かめる分 (SYNC_CHECK_PACKETS) のパケットが無ければ、
+/// 続きのデータが来るまで待つ (足りないまま確かめると偽の同期を採り、一度に渡した時と結果が変わった)。
+/// 同期を取り直した後は、その並びで最後のパケットの後ろを end にする (元の並びのまま残すと、
+/// 取り直した後は読み込みの区切りごとに 1 パケットずつ落ちた)
+pub fn split_packets(data: &[u8], packet_size: usize, aligned: bool, last: bool) -> Split<'_> {
     let offset = packet_size - TS_PACKET_SIZE;
     let mut packets = Vec::new();
     let mut pos = 0;
-    while let Some(found) = find_sync(data, packet_size, pos, None) {
-        pos = found;
+    let mut searching = !(aligned && data.len() >= packet_size && data[offset] == SYNC_BYTE);
+    loop {
+        if searching {
+            let Some(found) = find_sync(data, packet_size, pos, None) else {
+                // pos から data.len() - packet_size までには始まりが無い。それより後ろだけ残す
+                let end = pos.max(data.len().saturating_sub(packet_size - 1)).min(data.len());
+                return Split { packets, end, end_aligned: false };
+            };
+            if !last && (data.len() - found) / packet_size < SYNC_CHECK_PACKETS {
+                return Split { packets, end: found, end_aligned: false };
+            }
+            pos = found;
+        }
+        searching = true;
         let count = (data.len() - pos) / packet_size;
         if count == 0 {
-            break;
+            return Split { packets, end: pos, end_aligned: true };
         }
         let row = |k: usize| &data[pos + k * packet_size + offset..pos + (k + 1) * packet_size];
         match (0..count).position(|k| data[pos + k * packet_size + offset] != SYNC_BYTE) {
             None => {
                 packets.extend((0..count).map(row));
-                break;
+                return Split { packets, end: pos + count * packet_size, end_aligned: true };
             }
             Some(bad) => {
                 packets.extend((0..bad).map(row));
@@ -81,7 +111,6 @@ pub fn packet_array(data: &[u8], packet_size: usize) -> Vec<&[u8]> {
             }
         }
     }
-    packets
 }
 
 /// MPEG-2 の CRC32 (多項式 0x04C11DB7、初期値 0xFFFFFFFF)。末尾の CRC まで含めると、壊れていなければ 0

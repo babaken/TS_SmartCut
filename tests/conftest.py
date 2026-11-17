@@ -117,6 +117,15 @@ def no_automatic_proposals():
 
 
 @pytest.fixture(autouse=True)
+def forget_ffmpeg_versions():
+    """DependencyChecker が覚えた `ffmpeg -version` の出力を、差し替えたテストの後に残さない。"""
+    yield
+    from ts_smartcut.system.dependency_checker import DependencyChecker
+
+    DependencyChecker.clear_ffmpeg_version_cache()
+
+
+@pytest.fixture(autouse=True)
 def default_language_after_each_test():
     """英語の MainWindow を作ったテストの後に、アプリ全体の言語(language_manager.tr)が英語のまま
     残らないようにする(ほかのテストは日本語の文字を見る)。"""

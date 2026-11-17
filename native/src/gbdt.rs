@@ -221,9 +221,11 @@ impl Model {
             if leaves.len() != leaf_count || leaves.is_empty() {
                 return Err("bad leaf count".into());
             }
-            for n in &nodes {
+            // 子の番号は自分より後ろ (学習では子を後から足すので必ずそうなる)。前や自分を指すと predict が
+            // いつまでも回り、録画を開いた時にアプリが固まる (壊れた DB のモデル、2026-11-17)
+            for (i, n) in nodes.iter().enumerate() {
                 for child in [n.left, n.right] {
-                    let ok = if child < 0 { (!child as usize) < leaves.len() } else { (child as usize) < nodes.len() };
+                    let ok = if child < 0 { (!child as usize) < leaves.len() } else { (child as usize) > i && (child as usize) < nodes.len() };
                     if !ok {
                         return Err("child out of range".into());
                     }
