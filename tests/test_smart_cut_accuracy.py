@@ -14,6 +14,7 @@ import subprocess
 import pytest
 
 from tests._media_check import (
+    FRAME_PATTERN,
     check_cut,
     display_field_sources,
     frame_scan_flags,
@@ -67,6 +68,44 @@ def h264_interlaced(tmp_path_factory):
     )
 
 
+@pytest.fixture(scope="module")
+def h264_open_gop(tmp_path_factory):
+    # 放送の H.264 に近い: キーフレームが IDR でない I(オープン GOP)・参照 4 枚。コピーの部分の POC は
+    # 前の部分に続くよう書き換える(native/src/h264.rs)
+    return make_interlaced_source(
+        tmp_path_factory.mktemp("acc") / "h264_open.ts",
+        ["-c:v", "libx264", "-flags", "+ilme+ildct", "-bf", "3", "-refs", "4", "-g", "30", "-preset", "veryfast",
+         "-x264-params", "open-gop=1:scenecut=0"],
+        "aac",
+    )
+
+
+@pytest.fixture(scope="module")
+def h264_field_pictures(tmp_path_factory):
+    """1 フレームを 2 つのフィールドの絵(別々のパケット)で書く H.264(放送のテスト動画 2 本と同じ形、
+    2026-11-17)。ffmpeg のソフトウェアのエンコーダーでは作れず、Intel QSV の h264_qsv で作る(手元だけ)。"""
+    path = tmp_path_factory.mktemp("acc") / "h264_fields.ts"
+    video = "nullsrc=duration=4:size=320x240:rate=60000/1001,format=yuv420p," + FRAME_PATTERN
+    result = subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", video,
+         "-f", "lavfi", "-i", "anoisesrc=d=5:c=pink:r=48000:seed=11",
+         "-vf", "tinterlace=interleave_top,setfield=tff,format=nv12",
+         "-c:v", "h264_qsv", "-flags", "+ilme+ildct", "-bf", "2", "-g", "30", "-idr_interval", "100", "-b:v", "2M",
+         "-c:a", "aac", "-t", "4", str(path)],
+        capture_output=True,
+    )
+    if result.returncode != 0:
+        pytest.skip("h264_qsv が使えない")
+    packets = subprocess.run(
+        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-count_packets", "-count_frames",
+         "-show_entries", "stream=nb_read_packets,nb_read_frames", "-of", "csv=p=0", str(path)],
+        capture_output=True, text=True, check=True,
+    ).stdout.split()[0].split(",")
+    if int(packets[1]) != 2 * int(packets[0]):
+        pytest.skip("h264_qsv がフィールドの絵で書かなかった")
+    return path
+
+
 def _assert_encoder(engine, use_gpu, caplog):
     # GPUの時は、ソフトウェアへのやり直しなしにGPUで符号化したこと
     used = engine._encoder_cache.get("mpeg2video", "mpeg2video")
@@ -112,7 +151,7 @@ def _assert_audio_ok(result):
     assert result.audio_max_sync_error < 0.032
 
 
-@pytest.mark.parametrize("source_name", ["mpeg2_open_gop", "h264_interlaced"])
+@pytest.mark.parametrize("source_name", ["mpeg2_open_gop", "h264_interlaced", "h264_open_gop", "h264_field_pictures"])
 @pytest.mark.parametrize("mode", [MODE_SMART_CUT, MODE_FULL_REENCODE])
 def test_frame_accurate_modes_keep_exact_frames_interlace_and_sync(request, tmp_path, source_name, mode):
     source = request.getfixturevalue(source_name)
@@ -471,7 +510,7 @@ def test_unusable_gpu_mpeg2_output_falls_back_to_software(mixed_scan, tmp_path, 
     real_run = ffmpeg.run
     gpu_calls = []
 
-    def run(args, progress_callback=None):
+    def run(args, progress_callback=None, bytes_per_frame=None):
         if "mpeg2_qsv" in args:
             gpu_calls.append(args)
             raise MuxFailedError("E101", "GPUのエンコードに失敗(テスト)")

@@ -138,3 +138,11 @@ def test_removed_ranges_is_the_complement_of_the_keep_ranges():
     assert removed_ranges(100, [CutRange(10, 50), CutRange(30, 60), CutRange(90, 150)]) == [
         CutRange(0, 10), CutRange(60, 90)
     ]
+
+
+def test_empty_setting_paths_mean_not_set():
+    # 空の文字列は Path(".")(今のフォルダ)になり、そこへ出力していた(2026-11-17)
+    settings = AppSettings.from_dict({"default_output_dir": "", "temp_directory": "  ", "ffmpeg_path": ""})
+    assert settings.default_output_dir is None
+    assert settings.temp_directory is None
+    assert settings.ffmpeg_path is None

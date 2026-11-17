@@ -1,7 +1,8 @@
 import pytest
 
 from ts_smartcut.system import dependency_checker as dependency_checker_module
-from ts_smartcut.system.dependency_checker import MIN_FFMPEG_MAJOR, DependencyChecker, ffmpeg_major_version
+from ts_smartcut.ffmpeg.compat import MIN_FFMPEG_MAJOR
+from ts_smartcut.system.dependency_checker import DependencyChecker, ffmpeg_major_version
 
 
 def test_check_ffmpeg_true_when_on_path():
@@ -52,11 +53,13 @@ def test_ffmpeg_major_version(version, major):
 
 
 @pytest.mark.parametrize("version, old", [
-    ("7.1.5-12-g1fdbca85aa", "7.1.5-12-g1fdbca85aa"),
+    ("n5.1.6-16-g6e63e49496", "n5.1.6-16-g6e63e49496"),
+    ("6.1.1-3ubuntu5", None),  # Ubuntu 24.04 の標準
     ("n8.1.3", None),
     ("N-121234-g0123456789", None),  # 読めない版では警告しない
 ])
 def test_old_ffmpeg_version(monkeypatch, version, old):
+    DependencyChecker.clear_ffmpeg_version_cache()
     monkeypatch.setattr(dependency_checker_module.DependencyChecker, "_run_version",
                         staticmethod(lambda exe, args, timeout=5: f"ffmpeg version {version} Copyright (c) 2000-2026\n"))
     assert DependencyChecker.old_ffmpeg_version() == old
@@ -67,6 +70,47 @@ def test_old_ffmpeg_version_none_when_missing():
 
 
 def test_installed_ffmpeg_is_new_enough():
-    # テストの環境(手元・CI)は必要な版を満たす
-    assert DependencyChecker.old_ffmpeg_version() is None
-    assert MIN_FFMPEG_MAJOR == 8
+    # テストの環境(手元・CI)は必要な版を満たす。古い版での確かめ(手元の WSL)では飛ばす
+    old = DependencyChecker.old_ffmpeg_version()
+    if old is not None:
+        pytest.skip(f"ffmpeg {old} での確かめ")
+    assert MIN_FFMPEG_MAJOR == 6
+
+
+def test_version_of_the_installed_ffmpeg():
+    import shutil
+
+    if shutil.which("ffmpeg") is None:
+        pytest.skip("ffmpeg が無い")
+    assert DependencyChecker.ffmpeg_version()
+    build = DependencyChecker.ffmpeg_build_id()
+    assert build.startswith(DependencyChecker.ffmpeg_version() + " (") and build.endswith(")")
+    assert DependencyChecker.ffmpeg_version("no-such-ffmpeg-xyz") is None
+    assert DependencyChecker.ffmpeg_build_id("no-such-ffmpeg-xyz") is None
+
+
+def test_ffmpeg_version_is_read_once_and_failures_are_not_kept(monkeypatch):
+    # 失敗(時間切れなど)を覚えると、アプリを閉じるまで版が分からないままだった(2026-11-17)
+    DependencyChecker.clear_ffmpeg_version_cache()
+    calls = []
+    answers = [None, "ffmpeg version n7.1.5 Copyright\nconfiguration: --enable-libvpl\n"]
+
+    def fake_run(exe, args, timeout=5):
+        calls.append(exe)
+        return answers[min(len(calls) - 1, 1)]
+
+    monkeypatch.setattr(dependency_checker_module.DependencyChecker, "_run_version", staticmethod(fake_run))
+    assert DependencyChecker.ffmpeg_version("ff") is None
+    assert DependencyChecker.ffmpeg_version("ff") == "n7.1.5"
+    assert DependencyChecker.old_ffmpeg_version("ff") is None
+    assert DependencyChecker.ffmpeg_build_id("ff").startswith("n7.1.5 (")
+    assert calls == ["ff", "ff"]  # 読めた後は動かさない
+
+
+def test_ffmpeg_build_id_tells_builds_of_the_same_version_apart(monkeypatch):
+    outputs = {"a": "ffmpeg version 7.1 Copyright\nconfiguration: --enable-libvpl\n",
+               "b": "ffmpeg version 7.1 Copyright\nconfiguration: --disable-libvpl\n"}
+    DependencyChecker.clear_ffmpeg_version_cache()
+    monkeypatch.setattr(dependency_checker_module.DependencyChecker, "_run_version",
+                        staticmethod(lambda exe, args, timeout=5: outputs[exe]))
+    assert DependencyChecker.ffmpeg_build_id("a") != DependencyChecker.ffmpeg_build_id("b")

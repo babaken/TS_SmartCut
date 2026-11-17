@@ -200,10 +200,11 @@ def run_until_stalled(cmd: List[str], stall_seconds: float,
     cancel_event が立ったら子プロセスごと終了させて戻る(呼び出し側が cancel_event を見て中止にする)。
 
     ファイル全体を読む ffprobe(キーフレーム)が、録画の終わり近くで出力も CPU も止まったまま
-    終わらず、読み込み中の画面が固まった(2026-10-12、ゲームセンターCX #170。ほかの ffprobe が
+    終わらず、読み込み中の画面が固まった(2026-10-12、試験用の録画 A。ほかの ffprobe が
     同じ録画を読んでいる間だけ再現し、原因は不明)。全体の時間では長い録画や遅いディスクと
     見分けられないので、出力が止まった時間で判断する。"""
-    process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **no_window())
+    # Linux ではアプリが強制終了した時に子も終わらせる(このスレッドで待つので pdeathsig が効く、2026-11-17)
+    process = subprocess.Popen([*launch_prefix(), *cmd], stdout=subprocess.PIPE, stderr=subprocess.PIPE, **no_window())
     end_with_this_process(process)
     last_output = [time.monotonic()]
     chunks: dict = {"out": [], "err": []}

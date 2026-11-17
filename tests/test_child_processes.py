@@ -4,6 +4,8 @@ Windowsでは子プロセスは親が強制終了されても動き続け、書�
 消せなくなった(2026-10-05、Windows実機)。
 """
 
+import os
+import signal
 import subprocess
 import sys
 import time
@@ -70,13 +72,25 @@ def _running_on_linux(pid: int) -> bool:
         return False
 
 
+# キーフレームの ffprobe・波形の ffmpeg は run_until_stalled で起動する。setpriv が付いておらず、
+# アプリを強制終了すると、出力の止まった子(固まった ffprobe など)が残った(2026-11-17)。出力を続ける子は
+# パイプが閉じて自分で終わるので、確かめでは何も出さない子にする(パイプに書くと不具合が隠れる)
+LINUX_STALLED_PARENT = r"""
+import os
+from ts_smartcut.system.child_processes import run_until_stalled
+run_until_stalled(["ffmpeg", "-v", "error", "-re", "-f", "lavfi", "-i", "testsrc2=s=320x240:r=30:d=600",
+                   "-f", "null", os.devnull], stall_seconds=60)
+"""
+
+
 @pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux専用(setpriv)")
-def test_ffmpeg_ends_when_the_app_is_killed_on_linux():
+@pytest.mark.parametrize("script", [LINUX_PARENT, LINUX_STALLED_PARENT], ids=["run", "run_until_stalled"])
+def test_ffmpeg_ends_when_the_app_is_killed_on_linux(script):
     from ts_smartcut.system.child_processes import launch_prefix
 
     if not launch_prefix():
         pytest.skip("setpriv が無い環境")
-    parent = subprocess.Popen([sys.executable, "-c", LINUX_PARENT])
+    parent = subprocess.Popen([sys.executable, "-c", script])
     deadline = time.monotonic() + 10
     children = []
     while time.monotonic() < deadline and not children:
@@ -91,7 +105,10 @@ def test_ffmpeg_ends_when_the_app_is_killed_on_linux():
     deadline = time.monotonic() + 5
     while time.monotonic() < deadline and any(_running_on_linux(pid) for pid in children):
         time.sleep(0.1)
-    assert not any(_running_on_linux(pid) for pid in children)
+    left = [pid for pid in children if _running_on_linux(pid)]
+    for pid in left:  # 失敗した時も、残った ffmpeg を動かしたままにしない
+        os.kill(pid, signal.SIGKILL)
+    assert left == []
 
 
 def test_every_launch_in_the_app_hides_the_console_window():

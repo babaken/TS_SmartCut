@@ -303,7 +303,9 @@ class AppSettings:
         data = {k: v for k, v in data.items() if k in known}
         for key in _SETTINGS_PATH_KEYS:
             if key in data:
-                data[key] = _str_to_path(data[key])
+                # 空の文字列は未設定。Path("") は Path(".")(今のフォルダ)になってしまう(2026-11-17)
+                value = data[key]
+                data[key] = _str_to_path(value if not isinstance(value, str) or value.strip() else None)
         return cls(**data)
 
 

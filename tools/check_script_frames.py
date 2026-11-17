@@ -32,6 +32,8 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # ts_smartcut を読む(プロジェクトのルートで動かす)
+
 W, H = 64, 36
 FRAME = W * H
 MAX_SHIFT = 6
@@ -64,7 +66,7 @@ def source_info(path: Path) -> dict:
     # wrapper._video_frame_rate と同じ: r がフィールドレート（ソフトテレシネ）なら avg
     fps = avg if avg > 0 and abs(r - 2 * avg) <= 0.02 else r
     return {"codec": video["codec_name"], "field_order": video.get("field_order", ""),
-            "video_start": float(video["start_time"]), "fps": fps,
+            "video_start": float(video["start_time"]), "fps": fps, "index": int(video["index"]),
             "soft_telecine": avg > 0 and abs(r - 2 * avg) <= 0.02}
 
 
@@ -94,13 +96,13 @@ def decoded_pictures(path: Path) -> tuple[np.ndarray, list]:
     return pics, pts
 
 
-def packet_times(path: Path) -> list:
-    """映像の全パケットの表示時刻（並べ替え済み）。表示時刻の無いパケットは数えない。"""
-    out = subprocess.run(
-        ["ffprobe", "-v", "error", "-select_streams", "v:0", "-show_entries", "packet=pts_time", "-of", "csv=p=0",
-         str(path)], capture_output=True, text=True, encoding="utf-8", errors="replace", check=True)
-    values = [v.strip(",") for v in out.stdout.split()]
-    return sorted(float(v) for v in values if v not in ("", "N/A"))
+def packet_times(path: Path, info: dict) -> list:
+    """映像の絵の表示時刻（並べ替え済み）。表示時刻の無いパケットは数えない。1 フレームを 2 つのフィールドの絵で
+    書く H.264 は、アプリと同じく 2 つを 1 枚と数える（L-SMASH もそう数えた、2026-11-17）。"""
+    from ts_smartcut.ffmpeg.wrapper import FFmpegWrapper
+
+    index = info["index"]
+    return [pts for pts, _ in FFmpegWrapper().get_stream_packets(path, [index], frame_rates={index: info["fps"]})[index]]
 
 
 def picture_index(times: list, t: float) -> int:
@@ -238,7 +240,7 @@ def main(argv=None) -> int:
     for i, path in enumerate(args.recordings):
         info = source_info(path)
         pics, pts = decoded_pictures(path)
-        times = packet_times(path)
+        times = packet_times(path, info)
         ranks = [picture_index(times, t) for t in pts]
         result = {"recording": i, **{k: info[k] for k in ("codec", "field_order", "soft_telecine")},
                   "packets": len(times), "decoded": len(pts), "leading_undecodable": ranks[0],

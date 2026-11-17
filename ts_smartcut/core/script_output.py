@@ -378,10 +378,10 @@ def plan_script(ffmpeg, file_info: FileCutInfo) -> ScriptPlan:
         raise FFprobeError("E102", key="exceptions.script_audio_missing", path=source)
 
     video_index = int(video["index"])
-    pictures = ffmpeg.get_stream_packets(source, [video_index])[video_index]
+    fps = file_info.fps
+    pictures = ffmpeg.get_stream_packets(source, [video_index], frame_rates={video_index: fps})[video_index]
     if not pictures:
         raise FFprobeError("E102", key="exceptions.no_video_stream", path=source)
-    fps = file_info.fps
     video_start = float(video.get("start_time") or 0.0)
     last_pts, last_duration = pictures[-1]
     end_time = last_pts + (last_duration or 1.0 / fps)

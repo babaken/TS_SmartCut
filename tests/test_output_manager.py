@@ -108,6 +108,18 @@ def test_output_extension_is_always_the_source_extension(tmp_path, pattern, expe
     assert manager.generate_output_path(source).name == expected
 
 
+def test_a_dot_in_the_name_is_not_an_extension(tmp_path):
+    # {ext} の無いパターンで、名前の「.」の後ろを拡張子として置き換えて名前が切れた(2026-11-17)
+    source = tmp_path / "Show 1.5 final.ts"
+    source.write_bytes(b"")
+    manager = OutputManager(AppSettings(output_filename_pattern="{name}_cut"))
+    assert manager.generate_output_path(source).name == "Show 1.5 final_cut.ts"
+    manager = OutputManager(AppSettings(output_filename_pattern="{name}"))
+    other = tmp_path / "Show 1.5.ts"
+    other.write_bytes(b"")
+    assert manager.generate_output_path(other, reserved=[other]).name == "Show 1.5_001.ts"
+
+
 def test_user_specified_output_keeps_source_extension(tmp_path):
     source = tmp_path / "rec.m2ts"
     source.write_bytes(b"")

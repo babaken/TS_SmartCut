@@ -1,6 +1,7 @@
 """ハードウェアエンコーダーの判定と選択 (ffmpeg/gpu.py)。"""
 
 import platform
+from pathlib import Path
 
 import pytest
 
@@ -318,4 +319,56 @@ def test_interlaced_probe_rejects_field_pair_output():
     # つなぎ目合わせが失敗した(Windows実機、2026-10-05) -> インターレース不可とみなす
     if not probe_encoder_functional("h264_qsv"):
         pytest.skip("h264_qsvが使えるGPUが無い環境")
+    assert probe_interlaced_encoding("h264_qsv") is False
+
+
+@pytest.mark.parametrize("encoder, filters, passes", [
+    ("h264_qsv", ["repeatfields", "setfield", "setpts"], [["-bf", "0"], []]),
+    ("mpeg2_qsv", ["setpts", "fps"], [["-bf", "0"]]),
+])
+def test_interlaced_probe_uses_the_same_filters_as_the_re_encode(monkeypatch, encoder, filters, passes):
+    # 試しが実際の処理と違い、判定は ○ なのに変換だけが失敗した(ffmpeg 7.x の setpts の後、2026-11-16)。
+    # 試しは実際の再エンコードと同じフィルターと指定で行う(2026-11-17、利用者の決定)
+    import subprocess
+
+    commands = []
+
+    def fake_run(cmd, **kwargs):
+        commands.append(cmd)
+        if cmd[0] == "ffmpeg":
+            Path(cmd[-1]).write_bytes(b"x")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        frames = ", ".join(['{"interlaced_frame": 1}'] * 4)
+        return subprocess.CompletedProcess(cmd, 0, '{"frames": [%s], "streams": [{"nb_read_packets": "4"}]}' % frames, "")
+
+    monkeypatch.setattr(gpu_module.subprocess, "run", fake_run)
+    assert probe_interlaced_encoding(encoder) is True
+    encodes = [c for c in commands if c[0] == "ffmpeg"]
+    # 1 つ目は試しの入力(インターレースの MPEG-2 の TS)を作る。7.x の失敗は TS から読んだ映像でしか起きない
+    source = encodes.pop(0)
+    assert source[source.index("-c:v") + 1] == "mpeg2video" and "tinterlace" in source[source.index("-vf") + 1]
+    assert len(encodes) == len(passes)
+    for cmd, extra in zip(encodes, passes):
+        assert cmd[cmd.index("-i") + 1] == source[-1] and "-copyts" in cmd
+        names = [f.split("=")[0] for f in cmd[cmd.index("-vf") + 1].split(",")]
+        assert names[:len(filters)] == filters
+        assert "+ilme+ildct" in cmd and "-b:v" in cmd and "-maxrate" in cmd and "-bufsize" in cmd
+        assert ("-bf" in cmd) == bool(extra)
+        assert ("passthrough" in cmd) == encoder.startswith("h264")
+
+
+def test_interlaced_probe_fails_when_one_pass_fails(monkeypatch):
+    # Full Re-encode(B フレームあり)だけ失敗するエンコーダーも ×
+    import subprocess
+
+    def fake_run(cmd, **kwargs):
+        if cmd[0] == "ffmpeg":
+            if "-bf" in cmd or "mpeg2video" in cmd:
+                Path(cmd[-1]).write_bytes(b"x")
+                return subprocess.CompletedProcess(cmd, 0, "", "")
+            return subprocess.CompletedProcess(cmd, 1, "", "Error while opening encoder")
+        return subprocess.CompletedProcess(cmd, 0, '{"frames": [{"interlaced_frame": 1}], '
+                                                    '"streams": [{"nb_read_packets": "1"}]}', "")
+
+    monkeypatch.setattr(gpu_module.subprocess, "run", fake_run)
     assert probe_interlaced_encoding("h264_qsv") is False

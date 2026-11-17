@@ -38,7 +38,7 @@
 ## 必要なもの
 
 - Windows 10 / 11（64 ビット）または Linux（x86-64、glibc 2.39 以降。Ubuntu 24.04 以降と同じ世代のディストリビューション）
-- **ffmpeg / ffprobe（8 以降）** … PATH の上に必要です。同梱していません。古い版は正しく動きません（7.x はインターレースの H.264 を作り直すと灰色の絵になり、6.x はコピーの進捗が出ません）。Ubuntu 24.04 の標準のパッケージは 6.1 なので、新しいビルドを使ってください。古い時は起動の時に知らせます
+- **ffmpeg / ffprobe（6 以降）** … PATH の上に必要です。同梱していません（Ubuntu 24.04 の標準のパッケージの 6.1 で動きます）。5.x 以前では、自動カット案の計算と正確なカットができません。古い時は起動の時に知らせます
 - **mpv（libmpv）** … プレビューに使います。同梱していません。無くても起動し、カットの編集はすべて使えます（プレビューが出ないだけです）
   - Windows: `libmpv-2.dll`（または `mpv-2.dll`）を PATH の通ったフォルダに置きます
   - Linux: ディストリビューションの mpv / libmpv のパッケージを入れます
@@ -78,6 +78,23 @@ pip install ./native               # 自動カットの計算の部品（Rust）
 python -m ts_smartcut.main
 ```
 
+最新にする時は、同じフォルダで仮想環境を有効にして:
+
+```bash
+git pull
+pip install -r requirements.txt   # 依存パッケージが変わった時のため
+pip install ./native               # git pull で native/ が変わった時（下の確かめで合わないと出た時も）
+```
+
+使う前に確かめてから、アプリを起動し直します:
+
+```bash
+python -c "from ts_smartcut.autocut.native import native_problem as p; print(p() or 'native OK')"
+ffmpeg -version                    # 6 以上
+```
+
+`native OK` と出れば Rust の部品がアプリと合っています。合わない時は入っている版と必要な版が出るので、`pip install ./native` で入れ直します（入れ直さないと、起動の後に E506 の知らせが出て自動カットの案が止まります。カットの編集と変換はできます）。アプリでは「ヘルプ → システム情報」で ffmpeg・mpv・`ts_smartcut_native` の版が見られます。アプリ全体を確かめる時はテストを動かします（「開発」を参照）。
+
 Windows の詳しい手順は [docs/TS_SmartCut_Windows_Setup.md](docs/TS_SmartCut_Windows_Setup.md) にあります。`scripts/` に起動用のスクリプトがあります（Windows はコンソールの窓が出ない `run_ts_smartcut.bat`、Linux は `.desktop` から使える `run_ts_smartcut.sh`）。
 
 ## 設定と記録の置き場所
@@ -110,7 +127,7 @@ Smart Cut では、切れ目の前後（次のキーフレームまでの数フ�
 | プレビューの音が出ない・別の機器から出る | 「設定 → プレビュー → 音声出力デバイス」で出力先を選んでください |
 | [E302] コーデック非対応 | 映像が MPEG-2 / H.264 以外です。バッチリストの右クリックで Simple Copy にしてください |
 | [E004] 空き容量不足 | 出力と一時ファイルの分が要ります（同じドライブなら、残す部分のおよそ 2 倍）。そのドライブの空きを増やしてください |
-| [E101] ffmpeg の実行エラー | ffmpeg が古いかもしれません（8 以降が必要です）。ログを見てください |
+| [E101] ffmpeg の実行エラー | ffmpeg が古いかもしれません（6 以降が必要です）。ログを見てください |
 | [E505] で起動しない | アプリのフォルダに書き込めません。書き込めるフォルダに置いてください（インストーラーは書き込める場所に入れます） |
 | 出力先に `.ts_smartcut_temp` が残っている | 処理中にアプリが終わった時に残ります。次に同じ出力先で処理を始めた時に消えます。手で消してもかまいません |
 
@@ -120,7 +137,7 @@ Smart Cut では、切れ目の前後（次のキーフレームまでの数フ�
 
 ```bash
 pip install -e ".[dev]"            # pytest と、テストだけで使う numpy
-pytest
+pytest -q -p no:faulthandler   # Windows では -p no:faulthandler で LuaJIT の害の無い知らせを隠す
 ```
 
 テストは ffmpeg / ffprobe / mpv / Qt をモックせず実物で動かします。配布物（Windows のインストーラー、Linux の tar.gz）は `python build_release.py` で作ります（[docs/TS_SmartCut_Packaging.md](docs/TS_SmartCut_Packaging.md)）。

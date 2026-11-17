@@ -78,6 +78,8 @@ class BatchManager:
         self.stop_requested: bool = False
         self.skip_requested: bool = False
         self._lock = threading.Lock()
+        # 中止・スキップの印を立てる・消す所を一度に一つにする(印を消すのと中止が重なって中止が消えないように)
+        self._control_lock = threading.Lock()
 
     # ---- アイテム管理 (実行中はブロック) -------------------------------
 
@@ -197,6 +199,8 @@ class BatchManager:
                 return False
             self.is_running = True
             self.stop_requested = False
+            # 止まっている時に押したスキップを残さない(次に変換した項目が Skipped になった、2026-11-17)
+            self.skip_requested = False
             self.current_index = 0
             self.ffmpeg.cancel_event.clear()
             self._feature_stop.clear()
@@ -213,13 +217,33 @@ class BatchManager:
     def cancel(self) -> None:
         """実行中のffmpegを終了させて処理をやめる(中止ボタン)。処理中の項目は
         E504になり、作りかけの出力ファイルは消す。残りの項目も始めない。"""
-        self.stop_requested = True
-        self.ffmpeg.cancel_event.set()
-        self._feature_stop.set()
+        with self._control_lock:
+            self.stop_requested = True
+            self.ffmpeg.cancel_event.set()
+            self._feature_stop.set()
 
     def skip_current(self) -> None:
-        self.skip_requested = True
-        self._feature_stop.set()
+        """処理中の項目をスキップする(スキップボタン)。変換中ならその項目の ffmpeg を止め、出力は
+        置かずに Skipped にして次の項目へ進む(設計書 §8.2)。特徴の計算中なら計算をやめるだけで、
+        変換は終わっているので Done(§8.3)。動いていない時は何もしない。
+
+        以前は変換中に押しても ffmpeg を止めず、出力を置いたのに Skipped になり記録もされず、
+        立てたままの印で次の項目の特徴の計算がすぐに止まった(2026-11-17)。"""
+        with self._control_lock:
+            if not self.is_running:
+                return
+            self.skip_requested = True
+            self.ffmpeg.cancel_event.set()
+            self._feature_stop.set()
+
+    def _begin_item(self) -> None:
+        """項目の始まりで、前の項目へのスキップの印を消す(エラーの項目で押したスキップが残り、
+        次の項目が Skipped になった、2026-11-17)。中止の後は消さない。"""
+        with self._control_lock:
+            self.skip_requested = False
+            if not self.stop_requested:
+                self.ffmpeg.cancel_event.clear()
+                self._feature_stop.clear()
 
     def output_paths(self, exclude_index: Optional[int] = None) -> List[Path]:
         """項目の出力先(決まっているもの)。exclude_index の項目を除く(名称変更で自分と比べない)。"""
@@ -282,27 +306,29 @@ class BatchManager:
                     continue
 
                 self.current_index = index
+                self._begin_item()
                 item.status = STATUS_PROCESSING
 
                 try:
                     self._process_item(item, index, start_time, progress_callback)
                 except Exception as exc:  # noqa: BLE001 - バッチは1アイテムの失敗で全体を止めない
+                    if (isinstance(exc, ProcessingCancelledError) and self.skip_requested
+                            and not self.stop_requested):
+                        # スキップで ffmpeg を止めた。作りかけの出力は run_<id>/ ごと消えている
+                        logger.info("Skipped: %s", item.file_info.file_path)
+                        item.status = STATUS_SKIPPED
+                        continue
                     # エラーの項目は飛ばして次へ進む(利用者の要件 2026-10-05、design doc §8.3)。
                     # 自動再試行はしない: コーデック非対応や壊れた録画は何度やっても同じ
                     # エラーになる。やり直しはバッチリストの「再試行」で行う。
                     self._handle_item_error(item, exc)
                     continue
 
-                if self.skip_requested:
-                    item.status = STATUS_SKIPPED
-                    self.skip_requested = False
-                    continue
-                # 変換が終わった。記録して特徴を計算してから Done にする(処理中のまま)
+                # 変換が終わった(出力を置いた)。記録して特徴を計算してから Done にする(処理中のまま)。
+                # 変換の終わり際に押したスキップは、特徴の計算をやめるだけ
                 job = self._record_autocut_done(item)
                 if job is not None:
                     self._compute_features(job, index, start_time, progress_callback)
-                    # 特徴の計算中のスキップは、計算をやめるだけ(変換は終わっている)
-                    self.skip_requested = False
                 item.status = STATUS_DONE
         finally:
             self.is_running = False

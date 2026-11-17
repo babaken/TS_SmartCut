@@ -5,6 +5,11 @@ from ts_smartcut.gui.timeline import TimelineWidget
 from ts_smartcut.models import Bookmark, CutRange
 
 
+def _grab(widget):
+    """論理座標で色を読める画像。拡大率 200% の画面では grab() が 2 倍の大きさになる。"""
+    return widget.grab().toImage().scaled(widget.size())
+
+
 def test_frame_to_x_and_back_roundtrip(qapp):
     tl = TimelineWidget()
     tl.resize(1000, 60)
@@ -81,10 +86,10 @@ def test_keep_ranges_are_green_and_the_rest_red(qapp):
     tl = TimelineWidget()
     tl.resize(1000, 60)
     tl.set_total_frames(1000)
-    image = tl.grab().toImage()
+    image = _grab(tl)
     assert image.pixelColor(150, 30) != QColor(THEMES["light"]["remove_region"])  # 区間なしは赤くしない
 
     tl.set_cuts([CutRange(100, 200)])
-    image = tl.grab().toImage()
+    image = _grab(tl)
     assert image.pixelColor(150, 30) == QColor(THEMES["light"]["keep_region"])
     assert image.pixelColor(500, 30) == QColor(THEMES["light"]["remove_region"])

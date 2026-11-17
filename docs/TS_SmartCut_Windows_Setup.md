@@ -8,7 +8,7 @@
 ## 1. 事前に用意するもの
 ============================================================
 1. **Python 3.10 以上**（公式インストーラ、"Add python.exe to PATH" を有効にする。3.14.7 で動作確認済み）
-2. **ffmpeg / ffprobe**（8 以降。公式ビルドを展開し、`ffmpeg.exe`/`ffprobe.exe` のあるフォルダを PATH に
+2. **ffmpeg / ffprobe**（6 以降。公式ビルドを展開し、`ffmpeg.exe`/`ffprobe.exe` のあるフォルダを PATH に
    追加する。chocolatey 等でも可）
 3. **mpv と libmpv（`libmpv-2.dll`）** — 下の「1.1 mpv の入れ方」の手順で入れる。
    アプリは `libmpv-2.dll`（または `mpv-2.dll`）を PATH（と実行ファイルの隣）から探して読み込むので、
@@ -61,7 +61,7 @@ python -m venv .venv
 pip install -r requirements.txt
 
 # 確かめ
-python -c "import mpv, PySide6; print('imports OK')"
+python -c "import PySide6; print('imports OK')"
 ffmpeg -version
 ffprobe -version
 ```
@@ -96,12 +96,34 @@ Python の同じ処理は 2026-10-28 に削ったので、入れずに使うこ�
 ============================================================
 ## 5. 更新
 ============================================================
+PowerShell で:
+
 ```powershell
 cd TS_SmartCut
+.venv\Scripts\Activate.ps1
 git pull
 pip install -r requirements.txt   # 依存パッケージが変わった時のため
+pip install .\native              # git pull の表示に native/ があった時（下の確かめで合わないと出た時も）
 ```
-更新した後はアプリを起動し直す。
+
+`native\` の作り直しには数分かかる。動いているアプリは古い部品のまま動くので、終わってから起動し直す。
+
+### 確かめ
+
+```powershell
+python -c "from ts_smartcut.autocut.native import native_problem as p; print(p() or 'native OK')"
+ffmpeg -version                    # 6 以上
+```
+
+- `native OK` と出れば Rust の部品がアプリと合っている。合わない時は入っている版と必要な版が出るので、`pip install .\native` で入れ直す。
+- アプリを起動し直し、起動の後に E506 の知らせが出ないこと、「ヘルプ → システム情報」に ffmpeg・mpv・`ts_smartcut_native` の版が出ることを見る。
+- 録画を 1 本開いて自動カットの案が出ること、短い区間をバッチで変換できることを見れば、普段の使い方は確かめられる。
+- アプリ全体を確かめる時はテストを動かす（実物の ffmpeg・mpv・Qt を使う。10 分ほど）:
+
+```powershell
+pip install -e ".[dev]"
+python -m pytest -q -p no:faulthandler
+```
 
 ============================================================
 ## 6. うまく動かない時

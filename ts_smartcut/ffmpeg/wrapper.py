@@ -13,7 +13,6 @@ import hashlib
 import json
 import logging
 import os
-import re
 import subprocess
 import threading
 import time
@@ -22,6 +21,7 @@ from pathlib import Path
 from typing import Callable, List, Optional, Tuple, Union
 
 from ts_smartcut.errors import FFprobeError, MuxFailedError, ProcessingCancelledError
+from ts_smartcut.ffmpeg.compat import NO_FRAMES, progress_frames
 from ts_smartcut.models import AppSettings, FileCutInfo
 from ts_smartcut.system.child_processes import (
     StalledProcessError,
@@ -46,9 +46,6 @@ KEYFRAME_CACHE_RETENTION_DAYS = 30
 # 日本語は 1 文字 3 バイトなので、長い番組名をそのまま使うと超える
 _KEYFRAME_CACHE_NAME_CHARS = 40
 
-# 進捗は出力したフレーム数(frame=)で測る。time=は-copytsで放送の大きな時刻
-# (約21時間)を扱うと00:00:00.00のままになり使えなかった(ffmpeg 9、2026-10-06)。
-_FRAME_RE = re.compile(r"frame=\s*(\d+)")
 # 失敗時のメッセージに残すffmpegの出力の行数(末尾)
 _STDERR_TAIL_LINES = 200
 
@@ -142,6 +139,34 @@ def _video_frame_rate(video_stream: dict) -> float:
     r = _parse_frame_rate(video_stream.get("r_frame_rate", "0/1"))
     avg = _parse_frame_rate(video_stream.get("avg_frame_rate", "0/1"))
     return avg if _is_field_rate(avg, r) else r
+
+
+def merge_field_pictures(
+    packets: List[Tuple[float, float, bool]], fps: float
+) -> List[Tuple[float, float, bool]]:
+    """デコード順の映像パケット [(表示時刻, 長さ, キーフレームか)] の、フィールドごとの
+    パケットの組を 1 フレーム(最初のフィールドの時刻, 2 つの長さの和, 最初のキーフレームの印)
+    にまとめる。
+
+    H.264 のインターレースの録画には、1 フレームを 2 つのフィールドの絵として別々のパケットに
+    書くものがある(テスト動画 2 本、2026-11-17)。2 つ目のフィールドの時刻はちょうど次の
+    フレームの境目(半フレーム手前)に当たり、区間の境目がそこに来て、コピーした部分の
+    先頭と最後に片方のフィールドだけが入っていた(出力が約 150 枚欠けた)。フィールドの
+    パケットは長さが半フレームで、続くパケットが長さの分だけ後に表示されるもの。"""
+    field_limit = 0.75 / fps
+    merged: List[Tuple[float, float, bool]] = []
+    index = 0
+    while index < len(packets):
+        pts, duration, key = packets[index]
+        if index + 1 < len(packets) and 0 < duration < field_limit:
+            next_pts, next_duration, _ = packets[index + 1]
+            if 0 < next_duration < field_limit and abs(next_pts - (pts + duration)) < 0.25 / fps:
+                merged.append((pts, duration + next_duration, key))
+                index += 2
+                continue
+        merged.append((pts, duration, key))
+        index += 1
+    return merged
 
 
 def _keyframe_cache_path(file_path: Path, stat: os.stat_result) -> Path:
@@ -240,9 +265,11 @@ class FFmpegWrapper:
         self,
         args: List[str],
         progress_callback: Optional[Callable[[int], None]] = None,
+        bytes_per_frame: Optional[float] = None,
     ) -> subprocess.CompletedProcess:
         """ffmpegを実行する。progress_callbackは出力済みの映像フレーム数を受け取る
-        (約0.5秒ごと。音声だけの出力では呼ばれない)。"""
+        (約0.5秒ごと。音声だけの出力では呼ばれない)。bytes_per_frame を渡すと、
+        frame= を出さない ffmpeg(6.x のコピー)でも、書いた大きさから枚数を見積もって渡す。"""
         cmd = [str(self.ffmpeg_path), *args]
         if self.cancel_event.is_set():
             raise ProcessingCancelledError("E504", key="exceptions.cancelled")
@@ -267,7 +294,7 @@ class FFmpegWrapper:
 
         head = ""
         if progress_callback:
-            head = self._monitor_progress(process, progress_callback)
+            head = self._monitor_progress(process, progress_callback, bytes_per_frame)
 
         stdout, stderr = process.communicate()
         # 進捗を読んだ場合はその分のメッセージも失敗時の説明に含める(以前は
@@ -287,16 +314,23 @@ class FFmpegWrapper:
                 kill_process_tree(process)
                 return
 
-    def _monitor_progress(self, process: subprocess.Popen, callback: Callable[[int], None]) -> str:
+    def _monitor_progress(
+        self,
+        process: subprocess.Popen,
+        callback: Callable[[int], None],
+        bytes_per_frame: Optional[float] = None,
+    ) -> str:
         """ffmpegの標準エラー出力から出力済みフレーム数を読み、callbackへ渡す。
         読んだ出力の末尾(失敗時の説明用)を返す。進捗の行は
 で区切られるが、
         text=Trueの読み込みが改行として扱う。"""
         tail: List[str] = []
         for line in iter(process.stderr.readline, ""):
-            match = _FRAME_RE.search(line)
-            if match and line.lstrip().startswith("frame="):
-                callback(int(match.group(1)))
+            # 進捗の行の読み方(版による違い)は compat.py
+            frames = progress_frames(line, bytes_per_frame)
+            if frames is not None:
+                if frames != NO_FRAMES:
+                    callback(frames)
                 continue
             tail.append(line)
             if len(tail) > _STDERR_TAIL_LINES:
@@ -482,14 +516,14 @@ class FFmpegWrapper:
             return SCAN_SOFT_TELECINE
         return SCAN_INTERLACED if interlaced else SCAN_PROGRESSIVE
 
-    def get_video_packet_times(self, file_path: Path, start: float, end: float) -> List[Tuple[float, float]]:
-        """[start, end](絶対時刻)付近の映像パケットの(表示時刻, 長さ)を
-        表示時刻順に返す。デコードしないので速い。"""
+    def _read_video_packets(self, file_path: Path, start: float, end: float) -> List[Tuple[float, float, bool]]:
+        """[start, end](絶対時刻)付近の映像パケットの(表示時刻, 長さ, キーフレームか)を
+        ファイル内の順(=デコード順)に返す。表示時刻の無いパケットは数えない。"""
         result = subprocess.run(
             [
                 str(self.ffprobe_path), "-v", "quiet", "-select_streams", "v:0",
                 "-read_intervals", f"{max(0.0, start):.6f}%{end:.6f}",
-                "-show_entries", "packet=pts_time,duration_time", "-of", "csv=p=0",
+                "-show_entries", "packet=pts_time,duration_time,flags", "-of", "csv=p=0",
                 str(file_path),
             ],
             capture_output=True, text=True, encoding="utf-8", errors="replace",
@@ -508,8 +542,19 @@ class FFmpegWrapper:
                 duration = float(fields[1])
             except (ValueError, IndexError):
                 duration = 0.0
-            packets.append((pts, duration))
-        return sorted(packets)
+            packets.append((pts, duration, len(fields) > 2 and "K" in fields[2]))
+        return packets
+
+    def get_video_packet_times(
+        self, file_path: Path, start: float, end: float, fps: Optional[float] = None
+    ) -> List[Tuple[float, float]]:
+        """[start, end](絶対時刻)付近の映像のフレームの(表示時刻, 長さ)を
+        表示時刻順に返す。デコードしないので速い。fps を渡すと、フィールドごとの
+        パケット(merge_field_pictures)を 1 フレームにまとめる。"""
+        packets = self._read_video_packets(file_path, start, end)
+        if fps:
+            packets = merge_field_pictures(packets, fps)
+        return sorted((pts, duration) for pts, duration, _ in packets)
 
     def get_video_decode_order(
         self, file_path: Path, read_intervals: Optional[str] = None
@@ -602,31 +647,16 @@ class FFmpegWrapper:
         # keyframe_ptsはフレーム番号から求めた時刻で、実際のptsとは最大半
         # フレームずれうる(ソフトテレシネでは半フレーム位置にフレームがある)。
         tolerance = 0.75 / fps
-        result = subprocess.run(
-            [
-                str(self.ffprobe_path), "-v", "quiet", "-select_streams", "v:0",
-                "-read_intervals", f"{max(0.0, keyframe_pts - 2.0):.6f}%{keyframe_pts + 2.0:.6f}",
-                "-show_entries", "packet=pts_time,flags", "-of", "csv=p=0",
-                str(file_path),
-            ],
-            capture_output=True, text=True, encoding="utf-8", errors="replace",
-            **no_window(),
+        # フィールドごとのパケットは 1 フレームにまとめる(キーフレームの 2 つ目のフィールドは
+        # キーフレームより後に表示されるので、そこで探すのをやめてしまう)
+        packets = merge_field_pictures(
+            self._read_video_packets(file_path, keyframe_pts - 2.0, keyframe_pts + 2.0), fps
         )
-        if result.returncode != 0:
-            raise FFprobeError("E102", result.stderr)
 
-        packets = []
-        for line in result.stdout.splitlines():
-            fields = line.strip().split(",")
-            try:
-                packets.append((float(fields[0]), fields[1] if len(fields) > 1 else ""))
-            except (ValueError, IndexError):
-                continue
-
-        for index, (pts, flags) in enumerate(packets):
-            if "K" in flags and abs(pts - keyframe_pts) <= tolerance:
+        for index, (pts, _, key) in enumerate(packets):
+            if key and abs(pts - keyframe_pts) <= tolerance:
                 leading = []
-                for following_pts, _ in packets[index + 1:]:
+                for following_pts, _, _ in packets[index + 1:]:
                     if following_pts >= pts:
                         break
                     leading.append(following_pts)
@@ -649,9 +679,11 @@ class FFmpegWrapper:
         )
 
     def get_stream_packets(self, file_path: Path, stream_indexes: List[int],
-                           probe_args: List[str] = ()) -> dict:
+                           probe_args: List[str] = (), frame_rates: Optional[dict] = None) -> dict:
         """録画全体を 1 回読み、stream_indexes の各ストリームのパケットの (表示時刻, 長さ) を表示の順に
         返す({ストリームの番号: [...]}、絶対時刻、秒)。表示時刻の無いパケットは数えない。
+        frame_rates({ストリームの番号: fps})のストリームは、フィールドごとのパケットを 1 フレームにまとめる
+        (merge_field_pictures。L-SMASH Works はフィールドの絵 2 枚を 1 フレームと数えた、2026-11-17)。
 
         スクリプトの出力(設計書 §6.9)で、残す区間を「録画の中で表示の順に何番目の絵か」と、音声の
         何サンプル目かに直すのに使う(L-SMASH Works の数え方と同じ。試作で確かめた)。録画全体を読むので、
@@ -684,6 +716,10 @@ class FFmpegWrapper:
             except (ValueError, IndexError):
                 duration = 0.0
             target.append((pts, duration))
+        for index, fps in (frame_rates or {}).items():
+            if index in packets:
+                frames = merge_field_pictures([(pts, duration, False) for pts, duration in packets[index]], fps)
+                packets[index] = [(pts, duration) for pts, duration, _ in frames]
         for values in packets.values():
             values.sort()
         return packets
@@ -696,8 +732,8 @@ class FFmpegWrapper:
         fps: Optional[float] = None,
         use_cache: bool = True,
     ) -> List[int]:
-        """キーフレーム位置をフレーム番号のリストで返す。7日間・
-        mtime/サイズ変更検知付きのファイルキャッシュを使用する。"""
+        """キーフレーム位置をフレーム番号のリストで返す。名前・サイズ・mtime で見分けるファイルの
+        キャッシュを使う(30 日間使われなかったものは起動時に消す)。"""
         file_path = Path(file_path)
 
         if use_cache:

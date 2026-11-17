@@ -118,7 +118,7 @@ def test_cannot_close_while_encoding_and_cancel_stops_it(opened, messages, qapp,
     # 中止するまで終わらないffmpegの代わり
     started = threading.Event()
 
-    def slow_run(self, args, progress_callback=None):
+    def slow_run(self, args, progress_callback=None, bytes_per_frame=None):
         from ts_smartcut.errors import ProcessingCancelledError
 
         started.set()

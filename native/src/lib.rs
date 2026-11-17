@@ -11,11 +11,13 @@
 //! 読み終わった後の特徴の計算 (音量・コマとフレーム・四隅・ロゴの型と一致度・ロゴ画像の材料) は post.rs。
 //! ルールによる案づくり (境目の候補・区間の判定・案・局の値・正解との比較) は rules.rs、しきい値の自動補正
 //! (tuning.py) の評価 1 回分は tuning.rs、番組情報 (broadcast/program_info.py) の読み込みは
-//! program_info.rs (ARIB の文字は arib.rs)、TS のパケットとセクションの読み方は ts.rs (特徴の計算と共通)。
+//! program_info.rs (ARIB の文字は arib.rs)、TS のパケットとセクションの読み方は ts.rs (特徴の計算と共通)、
+//! 部分ごとに切り出した H.264 をつなぐ時の POC の書き換え (ffmpeg/smart_cut.py) は h264.rs。
 
 mod arib;
 mod arib_tables;
 mod gbdt;
+mod h264;
 mod logo;
 mod post;
 mod program_info;
@@ -241,7 +243,10 @@ impl Frames {
                 Ok(()) => {}
                 Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
                 Err(e) => {
+                    // 読めなくなったら止めた時と同じに扱う (Python が ffmpeg をすぐ終わらせる。
+                    // 止めないと ffmpeg は誰も読まない出力に書こうとして止まり、60 秒待ってから終わった)
                     self.error = Some(e.to_string());
+                    self.stopped = true;
                     break;
                 }
             }
@@ -310,7 +315,9 @@ impl Frames {
             }
             let writing = Instant::now();
             if let Err(e) = self.logo_file.write_all(&logo) {
+                // 一時ファイルが書けない (ディスクが一杯など) 時も、止めた時と同じに扱う
                 self.error = Some(e.to_string());
+                self.stopped = true;
                 break;
             }
             self.timing.add("frames_write_corners", writing);
@@ -355,7 +362,12 @@ impl Frames {
             self.stopped = tick_fn(self.diffs.len(), &mut failure);
         }
         if let Err(e) = self.logo_file.flush() {
+            // 終わりにまとめて書く分が書けない時も、途中まで (ロゴの値が欠ける) として止めた扱いにする
             self.error.get_or_insert(e.to_string());
+            if !self.stopped {
+                self.stopped = true;
+                stop.store(true, Ordering::Release);
+            }
         }
         failure
     }
@@ -620,7 +632,8 @@ impl FeatureReader {
 
     /// ffmpeg のフレームを最後まで (止めるまで) 読んで計算する。tick(フレーム数) は 128 フレームごとに
     /// 呼び、True を返したら止める。alive() は時刻の行を待つ時に、ffmpeg が動いているかを尋ねる。
-    /// 止めたら True を返す (この後 ffmpeg を終わらせてから finish を呼ぶ)
+    /// 止めたら True を返す (読み込み・一時ファイルの書き込みに失敗した時も。この後 ffmpeg を
+    /// 終わらせてから finish を呼ぶ)
     fn read_frames(&mut self, py: Python<'_>, tick: Py<PyAny>, alive: Py<PyAny>) -> PyResult<bool> {
         if self.read {
             return Err(PyRuntimeError::new_err("read_frames was already called"));
@@ -767,9 +780,11 @@ fn ts_smartcut_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rules::rule_compare, m)?)?;
     m.add_function(wrap_pyfunction!(program_info::read_program_info_raw, m)?)?;
     m.add_function(wrap_pyfunction!(program_info::decode_arib_text, m)?)?;
+    m.add_function(wrap_pyfunction!(h264::h264_tail_order, m)?)?;
+    m.add_function(wrap_pyfunction!(h264::h264_continue_order, m)?)?;
     m.add("THRESHOLD_NAMES", rules::THRESHOLD_NAMES.to_vec())?;
     // 計算の方法を変えたら上げる (ts_smartcut/autocut/native.py の NATIVE_VERSION も。合わない時は E506)。
     // main に出す PR ごとに 1 回。マージ前の PR の中で関数を足した時は上げ直さない (2026-10-31)
-    m.add("VERSION", 8)?;
+    m.add("VERSION", 10)?;
     Ok(())
 }

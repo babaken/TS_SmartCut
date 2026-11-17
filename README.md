@@ -39,7 +39,7 @@ How to use it: **[User Guide (docs/User_Guide.md)](docs/User_Guide.md)**.
 ## Requirements
 
 - Windows 10 / 11 (64-bit) or Linux (x86-64, glibc 2.39 or later: distributions of the Ubuntu 24.04 generation or newer)
-- **ffmpeg / ffprobe 8 or later** on PATH — not bundled. Older versions misbehave: 7.x re-encodes interlaced H.264 as gray pictures, 6.x reports no progress for stream copy (Ubuntu 24.04's own package is 6.1; use a newer build there). The app warns at startup when ffmpeg is older
+- **ffmpeg / ffprobe 6 or later** on PATH — not bundled (Ubuntu 24.04's own package, 6.1, works). 5.x and older cannot compute the auto-cut proposals or cut exactly. The app warns at startup when ffmpeg is older
 - **mpv (libmpv)** for the preview — not bundled. Without it the app still starts and all cut editing works (only the preview is missing)
   - Windows: put `libmpv-2.dll` (or `mpv-2.dll`) in a folder on PATH
   - Linux: install your distribution's mpv / libmpv package
@@ -79,6 +79,23 @@ pip install ./native               # the Rust part of the automatic cut; reinsta
 python -m ts_smartcut.main
 ```
 
+To update, in the same folder with the virtual environment active:
+
+```bash
+git pull
+pip install -r requirements.txt   # in case the dependencies changed
+pip install ./native               # when git pull changed native/ (or the check below says so)
+```
+
+Check it before use, then restart the app:
+
+```bash
+python -c "from ts_smartcut.autocut.native import native_problem as p; print(p() or 'native OK')"
+ffmpeg -version                    # 6 or later
+```
+
+`native OK` means the Rust part matches the app; otherwise it names the installed and the required version, and `pip install ./native` fixes it (if it isn't fixed, the app warns with E506 after starting and the automatic cut proposals stop; cut editing and conversion still work). In the app, Help → System Info shows the versions of ffmpeg, mpv and `ts_smartcut_native`. To check the whole app, run the tests (see Development).
+
 Windows details: [docs/TS_SmartCut_Windows_Setup.md](docs/TS_SmartCut_Windows_Setup.md) (in Japanese). `scripts/` has launchers (`run_ts_smartcut.bat` starts without a console window on Windows; `run_ts_smartcut.sh` can be used from a `.desktop` file on Linux).
 
 ## Where settings and records live
@@ -111,7 +128,7 @@ The pictures you see are the same, but re-encoded parts become hard-telecined 29
 | No preview sound, or sound from the wrong device | Choose the device in Settings → Preview → Audio output device |
 | [E302] Unsupported codec | The video is not MPEG-2 / H.264. Switch the batch item to Simple Copy (right-click) |
 | [E004] Not enough disk space | The output and temporary files need room (about twice the kept part on one drive). Free up space on that drive |
-| [E101] ffmpeg error | ffmpeg may be too old (8 or later is needed). See the log |
+| [E101] ffmpeg error | ffmpeg may be too old (6 or later is needed). See the log |
 | It won't start, with [E505] | The app's folder is not writable. Put it in a writable folder (the installers do) |
 | A `.ts_smartcut_temp` folder is left in the output folder | Left when the app ended during processing. It is removed the next time processing starts in that folder; you may delete it yourself |
 
@@ -121,7 +138,7 @@ The log is `logs/ts_smartcut.log` (see "Where settings and records live").
 
 ```bash
 pip install -e ".[dev]"            # pytest, and numpy (used by the tests only)
-pytest
+pytest -q -p no:faulthandler   # on Windows, -p no:faulthandler hides a harmless LuaJIT message
 ```
 
 The tests use the real ffmpeg / ffprobe / mpv / Qt instead of mocks. The release files (the Windows installer and the Linux tar.gz) are made with `python build_release.py` ([docs/TS_SmartCut_Packaging.md](docs/TS_SmartCut_Packaging.md), in Japanese).

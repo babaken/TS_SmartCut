@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import platform
 import subprocess
@@ -31,6 +32,8 @@ from typing import Callable, Dict, List, Optional, Union
 from ts_smartcut.i18n.language_manager import english, tr
 from ts_smartcut.system.child_processes import no_window
 from ts_smartcut.system.temp_file_manager import app_temp_dir
+
+logger = logging.getLogger(__name__)
 
 CPU_ENCODER = "libx264"
 
@@ -64,8 +67,9 @@ _PCI_VENDORS = {"0x10de": "nvidia", "0x1002": "amd", "0x8086": "intel"}
 
 # 判定方法の版。保存済みの判定結果と違えば判定し直す。
 # 1: 最優先のGPUだけ調べていた / 2: 全GPUを調べ、インターレースは1フレーム
-# 1パケットで出せることまで確認する(2026-10-05)
-DETECTION_VERSION = 2
+# 1パケットで出せることまで確認する(2026-10-05) / 3: インターレースの試しを実際の再エンコードと
+# 同じフィルター・指定にし、判定した ffmpeg のビルドを控える(2026-11-17)
+DETECTION_VERSION = 3
 
 
 @dataclass
@@ -102,6 +106,9 @@ class HardwareDetection:
     hardware_id: str = ""
     # 判定方法の版(DETECTION_VERSION)。判定方法を変えたら保存済みの結果を使わない。
     version: int = DETECTION_VERSION
+    # 判定に使った ffmpeg のビルド(DependencyChecker.ffmpeg_build_id)。ffmpeg を入れ替えたら判定し直す
+    # (GPU の部品の有無や動きはビルドで違う、2026-11-17 利用者の決定)。読めなかった時は None
+    ffmpeg_build: Optional[str] = None
 
     @property
     def ordered(self) -> List[HardwareEncoder]:
@@ -114,6 +121,7 @@ class HardwareDetection:
         return {
             "version": self.version,
             "hardware_id": self.hardware_id,
+            "ffmpeg_build": self.ffmpeg_build,
             "selected": asdict(self.selected) if self.selected else None,
             "candidates": [asdict(c) for c in self.candidates],
         }
@@ -128,6 +136,7 @@ class HardwareDetection:
             candidates=[HardwareEncoder(**c) for c in data.get("candidates", [])],
             hardware_id=data.get("hardware_id", ""),
             version=int(data.get("version", 1)),
+            ffmpeg_build=data.get("ffmpeg_build"),
         )
 
     def describe(self, text: Optional[Callable[..., str]] = None) -> str:
@@ -286,40 +295,96 @@ def probe_interlaced_encoding(
     device: Optional[str] = None,
     timeout: float = 20,
 ) -> bool:
-    """インターレース(トップフィールドが先)のままエンコードできるか。実際に
-    数フレームをフィールド符号化の指定で符号化し、出力の全フレームが
-    インターレースとして記録されているかで判定する(指定を無視して
-    プログレッシブで出すエンコーダーがある)。"""
+    """インターレース(トップフィールドが先)のままエンコードできるか。実際の再エンコード
+    (ffmpeg/smart_cut.py)と同じフィルターと指定で数フレームを符号化し、出力の全フレームが
+    インターレースとして記録されているかで判定する(指定を無視してプログレッシブで出す
+    エンコーダーがある)。Smart Cut の Head/Tail(-bf 0)と Full Re-encode(B フレームあり)の両方を試す。
+
+    試しが実際の処理と違うと、判定は ○ なのに変換だけが失敗した: ffmpeg 7.x はフィールドの
+    フィルターの setpts の後でフレームレートを失い、h264_qsv が開けなかった(2026-11-16)。これは
+    TS から読んだ映像の時だけ起き、テスト画像(lavfi)を直接符号化すると起きない(7.1.5、2026-11-17
+    実測)ので、試しもまず小さなインターレースの TS を作り、それを読んで符号化する。
+    GPU が使えるかは版の番号ではなく、この試しで決める(2026-11-17 利用者の決定)。"""
     hw_args = hw_input_args(encoder_name, device)
     if encoder_gpu_type(encoder_name) == "vaapi" and not hw_args:
         return False
-    filters = ["tinterlace=interleave_top", "setfield=tff"]
-    if hw_filter(encoder_name):
-        filters.append(hw_filter(encoder_name))
+    variants = [["-bf", "0"], []] if encoder_name.startswith("h264") else [["-bf", "0"]]
     # アプリの一時フォルダ(実行ファイルの横の Temp/)に書く。OS の一時フォルダは使わない(2026-11-16)
     with tempfile.TemporaryDirectory(prefix="probe_", dir=app_temp_dir()) as tmp:
-        out = Path(tmp) / "probe.ts"
-        try:
-            encode = subprocess.run(
-                [
-                    str(ffmpeg_path), "-hide_banner", "-loglevel", "error", *hw_args,
-                    "-f", "lavfi", "-i", f"testsrc=s={_PROBE_SIZE}:r=60000/1001:d=0.2",
-                    "-vf", ",".join(filters), "-flags", "+ilme+ildct",
-                    "-c:v", encoder_name, str(out),
-                ],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                **no_window(),
-            )
-            if encode.returncode != 0 or not out.exists():
-                return False
-            probe = subprocess.run(
-                [str(ffprobe_path), "-v", "quiet", "-select_streams", "v:0", "-count_packets",
-                 "-show_entries", "frame=interlaced_frame:stream=nb_read_packets", "-of", "json", str(out)],
-                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
-                **no_window(),
-            )
-        except (OSError, subprocess.SubprocessError):
+        source = _interlaced_probe_source(ffmpeg_path, Path(tmp), timeout)
+        if source is None:
             return False
+        return all(_probe_interlaced_once(encoder_name, ffmpeg_path, ffprobe_path, hw_args, extra, timeout,
+                                          source, Path(tmp) / f"probe{n}.ts")
+                   for n, extra in enumerate(variants))
+
+
+# 判定の試しのビットレート(放送の録画と同じくらい)。実際の再エンコードは元のビットレートを渡す
+_PROBE_BITRATE = 8_000_000
+
+
+def _interlaced_probe_source(ffmpeg_path: Union[str, Path], tmp: Path, timeout: float) -> Optional[Path]:
+    """試しの入力: インターレース(トップが先)の MPEG-2 の短い TS。mpeg2video はどのビルドにもある。"""
+    source = tmp / "source.ts"
+    try:
+        result = subprocess.run(
+            [str(ffmpeg_path), "-hide_banner", "-loglevel", "error",
+             "-f", "lavfi", "-i", f"testsrc=s={_PROBE_SIZE}:r=60000/1001:d=0.4",
+             "-vf", "tinterlace=interleave_top,setfield=tff", "-c:v", "mpeg2video", "-flags", "+ilme+ildct",
+             "-b:v", "4000000", str(source)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout, **no_window(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0 or not source.exists():
+        logger.info("Could not make the interlaced test source: %s", (result.stderr or "").strip()[-300:])
+        return None
+    return source
+
+
+def interlaced_probe_filters(encoder_name: str) -> List[str]:
+    """判定の試しで、読んだ TS の映像に通すフィルター。実際の再エンコードと同じ。H.264:
+    SmartCutEngine._field_filter(repeatfields・setfield・setpts でフレームの刻みに付け直す)。
+    MPEG-2: SmartCutEngine._encode_mpeg2_run(setpts で付け直して fps)。"""
+    rate = "30000/1001"
+    filters: List[str] = []
+    if encoder_name.startswith("mpeg2"):
+        filters += [f"setpts=N/({rate})/TB", f"fps={rate}"]
+    else:
+        filters += ["repeatfields", "setfield=tff", f"setpts=N/({rate})/TB"]
+    if hw_filter(encoder_name):
+        filters.append(hw_filter(encoder_name))
+    return filters
+
+
+def _probe_interlaced_once(encoder_name: str, ffmpeg_path: Union[str, Path], ffprobe_path: Union[str, Path],
+                           hw_args: List[str], extra: List[str], timeout: float, source: Path, out: Path) -> bool:
+    rate_args = ["-b:v", str(_PROBE_BITRATE), "-maxrate", str(int(_PROBE_BITRATE * 1.5)),
+                 "-bufsize", str(_PROBE_BITRATE * 2)]
+    passthrough = [] if encoder_name.startswith("mpeg2") else ["-fps_mode", "passthrough"]
+    try:
+        encode = subprocess.run(
+            [
+                str(ffmpeg_path), "-hide_banner", "-loglevel", "error", *hw_args,
+                "-copyts", "-i", str(source), "-map", "0:v:0",
+                "-vf", ",".join(interlaced_probe_filters(encoder_name)), *passthrough,
+                "-c:v", encoder_name, "-flags", "+ilme+ildct", *extra, *rate_args, str(out),
+            ],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            **no_window(),
+        )
+        if encode.returncode != 0 or not out.exists():
+            logger.info("Interlaced test encode failed: %s %s: %s", encoder_name, " ".join(extra),
+                        (encode.stderr or "").strip()[-300:])
+            return False
+        probe = subprocess.run(
+            [str(ffprobe_path), "-v", "quiet", "-select_streams", "v:0", "-count_packets",
+             "-show_entries", "frame=interlaced_frame:stream=nb_read_packets", "-of", "json", str(out)],
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=timeout,
+            **no_window(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
     try:
         data = json.loads(probe.stdout or "{}")
         frames = data.get("frames", [])
@@ -329,7 +394,12 @@ def probe_interlaced_encoding(
     # 1フレームが1パケット(フレームピクチャ)であること。h264_qsvはトップ/ボトムを
     # 別々のピクチャ(2パケット)で出し、パケット単位でつなぎ目を合わせるカット
     # 処理(_fit_decode_times等)が失敗した(Windows実機、2026-10-05)。
-    return bool(frames) and packets == len(frames) and all(f.get("interlaced_frame") == 1 for f in frames)
+    ok = bool(frames) and packets == len(frames) and all(f.get("interlaced_frame") == 1 for f in frames)
+    if not ok:
+        logger.info("Interlaced test encode not usable: %s %s: %d frames, %d packets, %d interlaced",
+                    encoder_name, " ".join(extra), len(frames), packets,
+                    sum(1 for f in frames if f.get("interlaced_frame") == 1))
+    return ok
 
 
 def _cpu_vendor() -> str:
@@ -436,8 +506,11 @@ def detect_hardware_encoders(
     )
     candidates.sort(key=_rank)
     fingerprint = hardware_fingerprint(sys_drm=sys_drm)
+    from ts_smartcut.system.dependency_checker import DependencyChecker
+
+    build = DependencyChecker.ffmpeg_build_id(ffmpeg_path)
     if not candidates:
-        return HardwareDetection(None, [], fingerprint)
+        return HardwareDetection(None, [], fingerprint, ffmpeg_build=build)
     for gpu in candidates:
         for codec in CODECS:
             encoder = _GPU_ENCODER_MAP.get(gpu.api, {}).get(codec)
@@ -446,7 +519,7 @@ def detect_hardware_encoders(
                 encoder, ffmpeg_path, ffprobe_path, device=gpu.device
             )
             gpu.capabilities[codec] = {"progressive": progressive, "interlaced": interlaced}
-    return HardwareDetection(candidates[0], candidates, fingerprint)
+    return HardwareDetection(candidates[0], candidates, fingerprint, ffmpeg_build=build)
 
 
 def hardware_fingerprint(os_name: Optional[str] = None, sys_drm: Path = Path("/sys/class/drm")) -> str:

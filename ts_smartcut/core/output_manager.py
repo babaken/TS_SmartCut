@@ -34,6 +34,9 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_FILENAME_PATTERN = AppSettings().output_filename_pattern
 SCRIPT_SUFFIXES = set(SCRIPT_EXTENSIONS.values())
+# 拡張子とみなして元の録画の拡張子に置き換えるもの。ほかの「.」の後ろ(「1.5話」の「.5話」など)は名前の一部
+_CONTAINER_SUFFIXES = {".ts", ".m2ts", ".mts", ".m2t", ".tp", ".trp", ".mp4", ".m4v", ".mkv", ".mka", ".mov",
+                       ".avi", ".wmv", ".flv", ".webm", ".mpg", ".mpeg", ".vob", ".nut", ".avs", ".vpy"}
 # ファイル名パターンで使える置き換え文字 (design doc §9.2)
 PATTERN_FIELDS = ("name", "ext", "date", "time")
 
@@ -217,8 +220,9 @@ class OutputManager:
         ext = extension or input_path.suffix
         if path.suffix.lower() == ext.lower():
             return path
-        if path.suffix:
+        if path.suffix.lower() in _CONTAINER_SUFFIXES:
             return path.with_suffix(ext)
+        # 名前の「.」の後ろを拡張子として置き換えると、名前が途中で切れた(「Show 1.5 final」→「Show 1.ts」、2026-11-17)
         return path.with_name(path.name + ext)
 
     def _collides(self, path: Path, input_path: Path, reserved: Iterable[Path] = ()) -> bool:
