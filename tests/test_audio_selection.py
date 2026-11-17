@@ -152,18 +152,18 @@ def test_project_keeps_the_audio_and_8_2_files_still_open(tmp_path):
     assert old.file_info.audio_track is None and old.file_info.selected_audio_index() == 0
 
 
-def test_the_cut_record_keeps_the_chosen_audio(tmp_path, sample_video):
+def test_the_cut_record_keeps_the_chosen_audio(tmp_path, interlaced_sample_video):
     from ts_smartcut.autocut.history_db import CutHistoryDB
     from ts_smartcut.autocut.recorder import AutoCutRecorder
 
     db = CutHistoryDB(tmp_path / "cut_history.db")
     recorder = AutoCutRecorder(db)
-    info = _file_info(sample_video)
+    info = _file_info(interlaced_sample_video)
     tracks = audio_tracks(_info())
     info.audio_tracks = [t.to_dict() for t in tracks]
     info.audio_track = tracks[1].to_dict()
     session = recorder.record_batch_done(info, "smart_cut", program_info=_info(), output_name="a_cut.ts")
-    second = _file_info(sample_video)
+    second = _file_info(interlaced_sample_video)
     second_session = recorder.record_batch_done(second, "smart_cut", output_name="b_cut.ts")
     with db.get_connection() as conn:
         rows = {r["id"]: dict(r) for r in conn.execute("SELECT * FROM cut_sessions")}
@@ -249,7 +249,7 @@ def test_dialog_switches_the_preview_audio_and_returns_the_choice(qapp):
 
 
 @pytest.fixture
-def opened(window, sample_video, monkeypatch, qapp):
+def opened(window, interlaced_sample_video, monkeypatch, qapp):
     from PySide6.QtWidgets import QMessageBox
 
     from tests._qt_helpers import pump_events
@@ -257,7 +257,7 @@ def opened(window, sample_video, monkeypatch, qapp):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     arrived = []
     window._program_info_bridge.ready.connect(lambda *_: arrived.append(1))
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     # 開いた時の本物の番組情報の読み込み(この動画には無い)が届くのを待つ(後から届いて上書きしないように)
     assert pump_events(qapp, lambda: bool(arrived) and not window._loading, timeout_ms=10000)
     window.batch_manager.items.clear()

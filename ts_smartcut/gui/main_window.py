@@ -899,13 +899,18 @@ class MainWindow(QMainWindow):
         """録画を開く時の重い読み込み(裏のスレッドで呼ぶ)。"""
         file_info = self.ffmpeg.get_file_info(path)
         try:
-            keyframes = self.ffmpeg.get_keyframes(path, fps=file_info.fps)
-        except TSSmartCutError:
-            keyframes = []
-        try:
             scan_type = self.ffmpeg.get_scan_type(path)
         except TSSmartCutError:
             scan_type = ""
+        if scan_type == SCAN_PROGRESSIVE:
+            # 対象は日本のテレビ放送の録画(インターレース・ソフトテレシネ)だけ。プログレッシブの H.264 では、
+            # Smart Cut の Head(x264 は B フレーム無しのプログレッシブで POC の方式 2 を使う)の後ろのコピーが
+            # まるごとデコードされなかった(2026-11-17 の実験)。想定外の形式は開かない(利用者の決定)
+            raise ValidationError("E206", key="exceptions.progressive_not_supported", path=path)
+        try:
+            keyframes = self.ffmpeg.get_keyframes(path, fps=file_info.fps)
+        except TSSmartCutError:
+            keyframes = []
         start_offset = 0.0
         if self.preview_widget.is_connected:
             try:

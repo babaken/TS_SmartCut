@@ -799,3 +799,25 @@ def test_skip_during_conversion_stops_ffmpeg_and_places_no_output(settings, isol
     assert first is None or not Path(first).exists()  # 出力は置かない
     assert _recorded_count(isolated_autocut_history) == 1  # 2 件目だけ記録
     assert seen_stop == [False]  # 2 件目の特徴の計算は止まらない
+
+
+def test_skip_after_the_join_places_no_output(settings, monkeypatch):
+    # 結合(最後の ffmpeg)が終わった後に押したスキップでも、出力を置かずに Skipped(2026-11-17 のレビュー:
+    # ffmpeg の中止では止まらず、出力を置いて Done にしていた)
+    from ts_smartcut.ffmpeg.smart_cut import SmartCutEngine
+
+    mgr = BatchManager(settings, ffmpeg=FakeFFmpegWrapper(), hardware=HardwareDetection())
+
+    def fake_process(self, file_info, cuts, output_path, mode="smart_cut", **kwargs):
+        output_path.write_bytes(b"fake output")
+        mgr.skip_current()  # 結合が終わった所で押す
+        return mode, None
+
+    monkeypatch.setattr(SmartCutEngine, "process", fake_process)
+    mgr.add_item(_file_info("skip_after_join"))
+    assert mgr.start() is True
+    mgr.thread.join(timeout=5)
+
+    assert mgr.items[0].status == STATUS_SKIPPED
+    out_dir = Path(settings.default_output_dir)
+    assert not [p for p in out_dir.rglob("*") if p.is_file()]  # 出力も作りかけも残らない

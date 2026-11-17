@@ -26,11 +26,11 @@ def _ranges(window):
 
 
 @pytest.fixture
-def opened(window, sample_video, monkeypatch, qapp):
+def opened(window, interlaced_sample_video, monkeypatch, qapp):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     # 警告の画面は本物を出さない(出すと押されるまでテストが止まる。2026-10-14 に 6 分止まった)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: window.preview_widget.get_current_frame() is not None, timeout_ms=5000)
     yield window
 

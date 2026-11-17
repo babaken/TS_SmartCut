@@ -35,27 +35,27 @@ def test_empty_history_shows_disabled_placeholder(window):
     assert all(not a.isEnabled() for a in actions)
 
 
-def test_open_via_dialog_adds_to_history(window, sample_video, monkeypatch):
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(sample_video), ""))
+def test_open_via_dialog_adds_to_history(window, interlaced_sample_video, monkeypatch):
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(interlaced_sample_video), ""))
 
     window._on_open()
 
-    assert window.recent_files.files == [sample_video]
-    assert _menu_texts(window) == [str(sample_video), "履歴をクリア"]
+    assert window.recent_files.files == [interlaced_sample_video]
+    assert _menu_texts(window) == [str(interlaced_sample_video), "履歴をクリア"]
 
 
-def test_save_project_adds_project_to_front(window, sample_video, tmp_path):
+def test_save_project_adds_project_to_front(window, interlaced_sample_video, tmp_path):
     window.cut_manager.add_cut(10, 20)
     project = tmp_path / "p.json"
 
     window.save_project(project)
 
-    assert window.recent_files.files == [project, sample_video]
+    assert window.recent_files.files == [project, interlaced_sample_video]
 
 
-def test_open_recent_project_restores_cuts(window, sample_video):
+def test_open_recent_project_restores_cuts(window, interlaced_sample_video):
     project = window.recent_files.files[0]
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     assert window.cut_manager.cuts == []
 
     window._rebuild_recent_menu()
@@ -66,10 +66,10 @@ def test_open_recent_project_restores_cuts(window, sample_video):
     assert window._project_path == project
 
 
-def test_open_recent_video_moves_it_to_front(window, sample_video):
-    assert window.open_recent_file(sample_video) is True
+def test_open_recent_video_moves_it_to_front(window, interlaced_sample_video):
+    assert window.open_recent_file(interlaced_sample_video) is True
 
-    assert window.recent_files.files[0] == sample_video
+    assert window.recent_files.files[0] == interlaced_sample_video
 
 
 def test_missing_file_is_removed_with_warning(window, tmp_path, captured_warnings):
@@ -82,9 +82,9 @@ def test_missing_file_is_removed_with_warning(window, tmp_path, captured_warning
     assert gone not in window.recent_files.files
 
 
-def test_menu_drops_files_deleted_since_last_shown(window, sample_video, tmp_path):
+def test_menu_drops_files_deleted_since_last_shown(window, interlaced_sample_video, tmp_path):
     copy = tmp_path / "copy.mp4"
-    shutil.copy(sample_video, copy)
+    shutil.copy(interlaced_sample_video, copy)
     window.recent_files.add(copy)
     assert str(copy) in _menu_texts(window)
 

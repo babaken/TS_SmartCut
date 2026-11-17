@@ -14,12 +14,12 @@ from ts_smartcut.gui import main_window as main_window_module
 
 
 @pytest.fixture(autouse=True)
-def opened(window, sample_video, qapp):
+def opened(window, interlaced_sample_video, qapp):
     """テストごとに動画を開き直す(区間・ブックマーク・Start/End も空になる)。前は最初のテストが開き、
     後のテストがその状態と前のテストの区間・ブックマークを前提にしていたので、単独で回すと E104 で
     落ちた(2026-10-27)。開き直した直後は前の動画の位置が残っていて、読み込み中のシークは失敗するので、
     0 フレームへのシークが通って着くまで待つ。"""
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
 
     def seeked() -> bool:
         try:
@@ -54,8 +54,8 @@ def _seek_and_settle(window, qapp, frame, paused=True):
     pump_events(qapp, lambda: False, timeout_ms=150)
 
 
-def test_open_file_creates_cut_manager_and_keyframes(window, sample_video):
-    window.open_file(sample_video)
+def test_open_file_creates_cut_manager_and_keyframes(window, interlaced_sample_video):
+    window.open_file(interlaced_sample_video)
 
     assert window.cut_manager is not None
     assert window.cut_manager.cuts == []

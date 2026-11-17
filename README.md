@@ -126,6 +126,7 @@ The pictures you see are the same, but re-encoded parts become hard-telecined 29
 | The preview area says "mpv: unavailable (preview-limited mode)" | libmpv was not found. On Windows put `libmpv-2.dll` in a folder on PATH; on Linux install the libmpv package |
 | The output freezes in VLC (especially after seeking) | VLC's hardware decoding; it happens with the source too. Turn off hardware-accelerated decoding in VLC, or play it with mpv |
 | No preview sound, or sound from the wrong device | Choose the device in Settings → Preview → Audio output device |
+| [E206] Unsupported scan type | Progressive recordings can't be opened. The app is made for Japanese TV recordings (interlaced or soft-telecined) |
 | [E302] Unsupported codec | The video is not MPEG-2 / H.264. Switch the batch item to Simple Copy (right-click) |
 | [E004] Not enough disk space | The output and temporary files need room (about twice the kept part on one drive). Free up space on that drive |
 | [E101] ffmpeg error | ffmpeg may be too old (6 or later is needed). See the log |

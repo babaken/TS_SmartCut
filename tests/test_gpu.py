@@ -118,6 +118,7 @@ def every_encoder_works(monkeypatch):
         "h264_nvenc", "h264_amf", "h264_qsv", "h264_vaapi", "mpeg2_qsv", "mpeg2_vaapi"])
     monkeypatch.setattr(gpu_module, "probe_encoder_functional", lambda *a, **k: True)
     monkeypatch.setattr(gpu_module, "probe_interlaced_encoding", lambda *a, **k: False)
+    monkeypatch.setattr(gpu_module, "_interlaced_probe_source", lambda *a, **k: Path("probe.ts"))
 
 
 @pytest.fixture
@@ -372,3 +373,16 @@ def test_interlaced_probe_fails_when_one_pass_fails(monkeypatch):
 
     monkeypatch.setattr(gpu_module.subprocess, "run", fake_run)
     assert probe_interlaced_encoding("h264_qsv") is False
+
+
+def test_detection_makes_the_interlaced_probe_source_once(monkeypatch, every_encoder_works):
+    # 試しの入力(小さなインターレースの TS)は GPU・コーデックごとに作り直さず、1 回の判定で 1 回だけ作る
+    made, used = [], []
+    monkeypatch.setattr(gpu_module, "_interlaced_probe_source", lambda *a, **k: made.append(1) or Path("probe.ts"))
+    monkeypatch.setattr(gpu_module, "probe_interlaced_encoding", lambda *a, **k: used.append(k["source"]) or True)
+
+    detection = detect_hardware_encoders(os_name="Windows", cpu_vendor="intel", sys_drm=Path("/nonexistent"))
+
+    assert len(made) == 1
+    assert len(used) >= 2 and set(used) == {Path("probe.ts")}
+    assert detection.ordered

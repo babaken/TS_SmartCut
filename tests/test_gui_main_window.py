@@ -74,10 +74,22 @@ def test_open_nonexistent_file_shows_error_without_crashing(window, tmp_path, mo
     assert len(errors) == 1
 
 
+def test_progressive_recording_is_refused_when_opened(window, sample_video, monkeypatch):
+    # 対象はインターレース・ソフトテレシネの放送の録画だけ。プログレッシブは開かない(E206、2026-11-17)
+    errors = []
+    monkeypatch.setattr(QMessageBox, "critical", lambda *a, **k: errors.append(a))
+
+    assert window.open_file(sample_video) is False
+
+    assert window.file_info is None
+    assert len(errors) == 1
+    assert "[E206]" in errors[0][2]
+
+
 # ---- ファイルを開く・再生制御 (以降は実際にファイルを読み込んだ状態で進行) ------
 
-def test_open_file_loads_info_and_enables_controls(window, sample_video):
-    window.open_file(sample_video)
+def test_open_file_loads_info_and_enables_controls(window, interlaced_sample_video):
+    window.open_file(interlaced_sample_video)
 
     assert window.file_info is not None
     assert window.file_info.total_frames == 75
@@ -94,14 +106,14 @@ def _forget_registrations(window):
         conn.execute("DELETE FROM recordings")
 
 
-def test_file_info_line_shows_station_and_program(window, sample_video, qapp):
+def test_file_info_line_shows_station_and_program(window, interlaced_sample_video, qapp):
     # 番組情報(自動カット A1)は裏で読み、読めたらファイル情報の行の先頭に局名・番組名を出す
     from datetime import datetime, timedelta
 
     from ts_smartcut.broadcast.program_info import JST, EventInfo, ProgramInfo
 
     _forget_registrations(window)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: False, timeout_ms=300)
     assert window.program_info is None  # MP4 には番組情報が無い
     assert window.file_info_label.text().startswith("sample.mp4")
@@ -136,7 +148,7 @@ def test_window_fits_a_1080p_screen_at_150_percent(window):
     assert window.preview_stack.minimumSizeHint().height() < 100
 
 
-def test_file_info_line_shows_a_registered_video(window, sample_video, qapp, monkeypatch):
+def test_file_info_line_shows_a_registered_video(window, interlaced_sample_video, qapp, monkeypatch):
     """自動カットの記録に登録済みの動画(先頭のハッシュとサイズが同じ)を開くと、ファイル情報の
     行の先頭に「登録済み」を出し、ツールチップに登録日時・最後のカットの日時・回数を出す。"""
     from datetime import datetime
@@ -145,7 +157,7 @@ def test_file_info_line_shows_a_registered_video(window, sample_video, qapp, mon
 
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
     _forget_registrations(window)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: False, timeout_ms=300)
     assert window.registration is None
     base = window.file_info_label.text()
@@ -157,7 +169,7 @@ def test_file_info_line_shows_a_registered_video(window, sample_video, qapp, mon
     assert recorder.record_batch_done(window.file_info, "smart_cut") is not None
     assert recorder.record_batch_done(window.file_info, "smart_cut") is not None
 
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: window.registration is not None)
     assert window.registration["cut_count"] == 2
     assert window.file_info_label.text() == "登録済み  |  " + base
@@ -168,15 +180,15 @@ def test_file_info_line_shows_a_registered_video(window, sample_video, qapp, mon
 
     # 後のテストで「登録済み」が出ないよう、記録を消して開き直す
     _forget_registrations(window)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: False, timeout_ms=300)
 
 
-def test_opening_a_file_does_not_start_playback_and_sound_starts_muted(window, sample_video, qapp):
+def test_opening_a_file_does_not_start_playback_and_sound_starts_muted(window, interlaced_sample_video, qapp):
     # ファイルを開いても自動で再生しない。音は初期状態で消えている(利用者の要件 2026-10-06)
     mpv = window.preview_widget.controller._mpv
     mpv.pause = False  # 前のファイルを再生中だった
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     pump_events(qapp, lambda: window.preview_widget.get_current_frame() is not None)
     pump_events(qapp, lambda: False, timeout_ms=300)
     assert mpv.pause is True
@@ -392,9 +404,9 @@ def test_system_theme_follows_os_changes(window, monkeypatch):
     assert calls == [SYSTEM_THEME]
 
 
-def test_add_to_batch_uses_default_processing_mode_setting(window, sample_video, monkeypatch):
+def test_add_to_batch_uses_default_processing_mode_setting(window, interlaced_sample_video, monkeypatch):
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.cut_manager.add_cut(0, 25)
     window.settings.default_processing_mode = "full_reencode"
     try:
@@ -407,30 +419,30 @@ def test_add_to_batch_uses_default_processing_mode_setting(window, sample_video,
         window.settings.default_processing_mode = "smart_cut"
 
 
-def test_add_to_batch_without_keep_ranges_is_refused(window, sample_video, monkeypatch):
+def test_add_to_batch_without_keep_ranges_is_refused(window, interlaced_sample_video, monkeypatch):
     messages = []
     monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text: messages.append(text))
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.batch_manager.items.clear()
     window._on_add_to_batch()
     assert window.batch_manager.items == []
     assert messages and "残す区間がありません" in messages[0]
 
 
-def _open_as_vfr(window, sample_video, monkeypatch):
+def _open_as_vfr(window, interlaced_sample_video, monkeypatch):
     real_get_file_info = window.ffmpeg.get_file_info
     monkeypatch.setattr(window.ffmpeg, "get_file_info",
                         lambda path: dataclasses.replace(real_get_file_info(path), is_vfr=True))
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: warnings.append(text))
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     return warnings
 
 
-def test_opening_vfr_file_warns_and_batch_shows_simple_copy(window, sample_video, monkeypatch):
+def test_opening_vfr_file_warns_and_batch_shows_simple_copy(window, interlaced_sample_video, monkeypatch):
     # design doc §16.3: VFRではSmart CutがSimple Copyになることを開いた時に知らせる
-    warnings = _open_as_vfr(window, sample_video, monkeypatch)
+    warnings = _open_as_vfr(window, interlaced_sample_video, monkeypatch)
     try:
         assert len(warnings) == 1 and "可変フレームレート" in warnings[0]
         window.batch_manager.items.clear()  # 前のテストで同じファイルを追加済み
@@ -443,36 +455,36 @@ def test_opening_vfr_file_warns_and_batch_shows_simple_copy(window, sample_video
         window.batch_list_view._refresh_list()
 
 
-def test_opening_vfr_file_does_not_warn_without_smart_cut(window, sample_video, monkeypatch):
+def test_opening_vfr_file_does_not_warn_without_smart_cut(window, interlaced_sample_video, monkeypatch):
     window.settings.default_processing_mode = "simple_copy"
     try:
-        assert _open_as_vfr(window, sample_video, monkeypatch) == []
+        assert _open_as_vfr(window, interlaced_sample_video, monkeypatch) == []
     finally:
         window.settings.default_processing_mode = "smart_cut"
 
 
-def test_constant_frame_rate_file_does_not_warn(window, sample_video, monkeypatch):
+def test_constant_frame_rate_file_does_not_warn(window, interlaced_sample_video, monkeypatch):
     warnings = []
     monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text: warnings.append(text))
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     assert window.file_info.is_vfr is False and warnings == []
 
 
-def test_file_info_line_shows_scan_type_and_bitrate(window, sample_video):
+def test_file_info_line_shows_scan_type_and_bitrate(window, interlaced_sample_video):
     # 再エンコードは元の走査方式・ビットレートに合わせるので、開いた時に見えるようにする
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     text = window.file_info_label.text()
-    assert "プログレッシブ" in text and "Mbps" in text
+    assert "インターレース" in text and "Mbps" in text
 
 
-def test_status_bar_shows_free_space_of_output_dir(window, sample_video, tmp_path):
+def test_status_bar_shows_free_space_of_output_dir(window, interlaced_sample_video, tmp_path):
     import shutil
 
-    window.open_file(sample_video)
-    expected = shutil.disk_usage(sample_video.parent).free / 1e9
+    window.open_file(interlaced_sample_video)
+    expected = shutil.disk_usage(interlaced_sample_video.parent).free / 1e9
     text = window.disk_free_label.text()
     assert text.startswith("出力先の空き: ") and abs(float(text.split()[1]) - expected) < 1.0
-    assert window.disk_free_label.toolTip() == str(sample_video.parent)
+    assert window.disk_free_label.toolTip() == str(interlaced_sample_video.parent)
 
     # 設定の出力先(まだ無いフォルダでも)が優先
     window.settings.default_output_dir = tmp_path / "not" / "yet"
@@ -485,9 +497,9 @@ def test_status_bar_shows_free_space_of_output_dir(window, sample_video, tmp_pat
         window.settings.default_output_dir = None
 
 
-def test_cut_list_title_shows_total_cut_time(window, sample_video, monkeypatch):
-    # design doc §4.8: 「カット区間 (HH:MM:SS.mmm)」。sample_videoは25fps
-    window.open_file(sample_video)
+def test_cut_list_title_shows_total_cut_time(window, interlaced_sample_video, monkeypatch):
+    # design doc §4.8: 「カット区間 (HH:MM:SS.mmm)」。interlaced_sample_videoは25fps
+    window.open_file(interlaced_sample_video)
     assert window.cut_list_title.text() == "残す区間（確定再生時間：00:00:00.000　計算再生時間：―）"
 
     window.cut_manager.add_cut(0, 25)    # 1秒
@@ -503,12 +515,12 @@ def test_cut_list_title_shows_total_cut_time(window, sample_video, monkeypatch):
     assert window.cut_list_title.text() == "残す区間（確定再生時間：00:00:00.000　計算再生時間：―）"
 
 
-def test_cut_list_title_shows_the_computed_time_of_the_proposals(window, sample_video):
+def test_cut_list_title_shows_the_computed_time_of_the_proposals(window, interlaced_sample_video):
     # 計算再生時間 = 自動カットが出した案すべての合計。承認・棄却しても変わらない(2026-10-11)。
-    # sample_videoは25fps
+    # interlaced_sample_videoは25fps
     from ts_smartcut.models import CutProposal
 
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     first, second = CutProposal(0, 25, 0.9, "テスト"), CutProposal(50, 100, 0.4, "テスト")
     window.cut_manager.set_proposals([first, second])
     window._refresh_cut_list()
@@ -520,8 +532,8 @@ def test_cut_list_title_shows_the_computed_time_of_the_proposals(window, sample_
     assert window.cut_list_title.text() == "残す区間（確定再生時間：00:00:01.000　計算再生時間：00:00:03.000）"
 
 
-def test_clear_all_asks_then_clears_and_undo_restores(window, sample_video, monkeypatch):
-    window.open_file(sample_video)
+def test_clear_all_asks_then_clears_and_undo_restores(window, interlaced_sample_video, monkeypatch):
+    window.open_file(interlaced_sample_video)
     window.cut_manager.add_cut(5, 10)
     window.bookmark_manager.add_bookmark(20, "CM")
     window._refresh_cut_list()
@@ -553,11 +565,11 @@ def _drop_event(paths):
 
 
 @pytest.fixture
-def sample_ts(sample_video, tmp_path):
+def sample_ts(interlaced_sample_video, tmp_path):
     import subprocess
 
     path = tmp_path / "録画.ts"
-    subprocess.run(["ffmpeg", "-v", "error", "-i", str(sample_video), "-c", "copy", str(path)], check=True)
+    subprocess.run(["ffmpeg", "-v", "error", "-i", str(interlaced_sample_video), "-c", "copy", str(path)], check=True)
     return path
 
 
@@ -583,10 +595,10 @@ def test_unsupported_drops_are_rejected(window, tmp_path, names):
     assert not event.isAccepted()
 
 
-def test_add_to_batch_takes_a_snapshot_of_the_keep_ranges(window, sample_video, monkeypatch):
+def test_add_to_batch_takes_a_snapshot_of_the_keep_ranges(window, interlaced_sample_video, monkeypatch):
     """追加の後の「基準外」の切り替え・区間の編集は、バッチの項目に影響しない(エンコード開始と同じ)。"""
     monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.batch_manager.items.clear()
     window.cut_manager.add_cut(0, 25)
     try:
@@ -681,13 +693,13 @@ def test_tab_visibility_and_batch_column_widths_follow_the_settings(window):
         window.settings.batch_column_widths = saved
 
 
-def test_double_click_on_a_keep_range_opens_the_edit(window, sample_video, monkeypatch):
+def test_double_click_on_a_keep_range_opens_the_edit(window, interlaced_sample_video, monkeypatch):
     # 残す区間(手で入れた・承認した案)の行をダブルクリックすると区間編集。未判断の案の行は何もしない
     from PySide6.QtWidgets import QInputDialog
 
     from ts_smartcut.models import CutProposal
 
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.cut_manager.clear_all()  # 前のテストの区間が残っていることがある
     window.cut_manager.add_cut(0, 25)
     window.cut_manager.set_proposals([CutProposal(50, 75, 0.9, "テスト")])
@@ -707,7 +719,7 @@ def test_double_click_on_a_keep_range_opens_the_edit(window, sample_video, monke
     assert [(c.start_frame, c.end_frame) for c in window.cut_manager.cuts] == [(5, 20)]
 
 
-def test_add_to_batch_asks_the_output_name_and_allows_episodes(window, sample_video, monkeypatch):
+def test_add_to_batch_asks_the_output_name_and_allows_episodes(window, interlaced_sample_video, monkeypatch):
     # バッチ追加のたびに保存名称を尋ねる。1本の録画の2つの話を名前を変えて追加できる。
     # キャンセルなら追加しない(2026-10-11)
     from ts_smartcut.gui import output_name_dialog
@@ -716,7 +728,7 @@ def test_add_to_batch_asks_the_output_name_and_allows_episodes(window, sample_vi
     # 前のテストの未判断の案が残っていても確認で止まらない
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     window.batch_manager.items.clear()
-    window.open_file(sample_video)
+    window.open_file(interlaced_sample_video)
     window.cut_manager.clear_all()
     window.cut_manager.add_cut(0, 10)
     answers = iter([None, "第1話", "第2話"])
@@ -736,7 +748,7 @@ def test_add_to_batch_asks_the_output_name_and_allows_episodes(window, sample_vi
         window.cut_manager.add_cut(15, 25)
         window._on_add_to_batch()
         items = window.batch_manager.items
-        assert [item.output_path.name for item in items] == ["第1話" + sample_video.suffix, "第2話" + sample_video.suffix]
+        assert [item.output_path.name for item in items] == ["第1話" + interlaced_sample_video.suffix, "第2話" + interlaced_sample_video.suffix]
         assert [(c.start_frame, c.end_frame) for c in items[1].file_info.cuts] == [(15, 25)]
         # 2つ目の初期値は1つ目(バッチの他の項目)と重ならない名前
         assert initials[2] != items[0].output_path

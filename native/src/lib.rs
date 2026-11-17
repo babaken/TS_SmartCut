@@ -785,6 +785,6 @@ fn ts_smartcut_native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add("THRESHOLD_NAMES", rules::THRESHOLD_NAMES.to_vec())?;
     // 計算の方法を変えたら上げる (ts_smartcut/autocut/native.py の NATIVE_VERSION も。合わない時は E506)。
     // main に出す PR ごとに 1 回。マージ前の PR の中で関数を足した時は上げ直さない (2026-10-31)
-    m.add("VERSION", 10)?;
+    m.add("VERSION", 11)?;
     Ok(())
 }

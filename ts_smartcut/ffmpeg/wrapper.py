@@ -152,10 +152,15 @@ def merge_field_pictures(
     書くものがある(テスト動画 2 本、2026-11-17)。2 つ目のフィールドの時刻はちょうど次の
     フレームの境目(半フレーム手前)に当たり、区間の境目がそこに来て、コピーした部分の
     先頭と最後に片方のフィールドだけが入っていた(出力が約 150 枚欠けた)。フィールドの
-    パケットは長さが半フレームで、続くパケットが長さの分だけ後に表示されるもの。"""
+    パケットは長さが半フレームで、続くパケットが長さの分だけ後に表示されるもの。
+
+    組にするのは最初のキーフレーム(1 つ目のフィールド)から。読み始めが 2 つ目のフィールドだと、
+    それを次のフレームの 1 つ目のフィールドと組にして、以後の組が半フレームずれる(2026-11-17 の
+    レビュー)。キーフレームより前のパケットは 1 つずつ数える。キーフレームが無ければ初めから組にする。"""
     field_limit = 0.75 / fps
-    merged: List[Tuple[float, float, bool]] = []
-    index = 0
+    first_key = next((i for i, packet in enumerate(packets) if packet[2]), 0)
+    merged: List[Tuple[float, float, bool]] = list(packets[:first_key])
+    index = first_key
     while index < len(packets):
         pts, duration, key = packets[index]
         if index + 1 < len(packets) and 0 < duration < field_limit:
@@ -770,10 +775,13 @@ class FFmpegWrapper:
             str(file_path),
         ]
         try:
-            result = run_until_stalled(cmd, STALL_SECONDS)
+            # 長い録画では数分かかるので、スキップ・中止で止められるようにする(2026-11-17 のレビュー)
+            result = run_until_stalled(cmd, STALL_SECONDS, cancel_event=self.cancel_event)
         except StalledProcessError as e:
             raise FFprobeError("E102", key="exceptions.keyframes_stalled", seconds=f"{e.seconds:.0f}",
                                path=file_path) from e
+        if self.cancel_event.is_set():
+            raise ProcessingCancelledError("E504", key="exceptions.cancelled")  # 途中までの結果は覚えない
         if result.returncode != 0:
             raise FFprobeError("E102", result.stderr.decode("utf-8", errors="replace"))
 

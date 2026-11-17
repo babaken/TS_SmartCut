@@ -233,3 +233,25 @@ def sample_video(tmp_path_factory) -> Path:
         capture_output=True,
     )
     return path
+
+
+@pytest.fixture(scope="session")
+def interlaced_sample_video(tmp_path_factory) -> Path:
+    """sample_video と同じ絵・長さで、インターレースとして符号化したもの。画面で開くテスト用:
+    プログレッシブの録画は開く時に断る(E206、2026-11-17)。"""
+    out_dir = tmp_path_factory.mktemp("ffmpeg_fixtures_interlaced")
+    path = out_dir / "sample.mp4"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-f", "lavfi", "-i", "testsrc=duration=3:size=320x240:rate=25",
+            "-f", "lavfi", "-i", "sine=frequency=1000:duration=3",
+            "-vf", "setfield=tff", "-flags", "+ilme+ildct",
+            "-c:v", "libx264", "-pix_fmt", "yuv420p", "-g", "10",
+            "-c:a", "aac",
+            "-y", str(path),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    return path

@@ -107,6 +107,16 @@ def test_ffmpeg_version_is_read_once_and_failures_are_not_kept(monkeypatch):
     assert calls == ["ff", "ff"]  # 読めた後は動かさない
 
 
+def test_ffmpeg_build_id_runs_a_failing_ffmpeg_only_once(monkeypatch):
+    # 読めない ffmpeg は時間切れ(20 秒)まで待つので、1 回の確かめで 2 回動かすと 2 倍待った(2026-11-17 のレビュー)
+    DependencyChecker.clear_ffmpeg_version_cache()
+    calls = []
+    monkeypatch.setattr(dependency_checker_module.DependencyChecker, "_run_version",
+                        staticmethod(lambda exe, args, timeout=5: calls.append(exe)))
+    assert DependencyChecker.ffmpeg_build_id("ff") is None
+    assert calls == ["ff"]
+
+
 def test_ffmpeg_build_id_tells_builds_of_the_same_version_apart(monkeypatch):
     outputs = {"a": "ffmpeg version 7.1 Copyright\nconfiguration: --enable-libvpl\n",
                "b": "ffmpeg version 7.1 Copyright\nconfiguration: --disable-libvpl\n"}

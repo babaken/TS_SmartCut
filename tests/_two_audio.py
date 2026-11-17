@@ -32,7 +32,8 @@ def _make(path: Path, seconds: float, two: bool, offset: float) -> None:
         maps += ["-map", "2:a"]
         ids += ["-streamid", f"2:{SECOND_PID:#x}"]
     subprocess.run(["ffmpeg", "-v", "error", "-y", *inputs, *maps,
-                    "-c:v", "mpeg2video", "-q:v", "2", "-g", "15", "-bf", "2", "-c:a", "aac", "-b:a", "96k",
+                    "-c:v", "mpeg2video", "-q:v", "2", "-g", "15", "-bf", "2", "-flags", "+ilme+ildct", "-vf", "setfield=tff",
+                    "-c:a", "aac", "-b:a", "96k",
                     *ids, "-mpegts_service_id", "1", "-mpegts_pmt_start_pid", f"{PMT_PID:#x}",
                     "-output_ts_offset", f"{offset}", "-muxdelay", "0", "-f", "mpegts", str(path)], check=True)
 
