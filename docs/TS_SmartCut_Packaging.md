@@ -115,10 +115,9 @@ pyinstaller ts_smartcut.spec --noconfirm
 出力: `dist\TS_SmartCut\`フォルダ（中に`TS_SmartCut.exe`と`_internal\`）。
 このフォルダごとZIP圧縮して配布する。
 
-使っていない Qt の部品は `ts_smartcut.spec` で外す（2026-10-28）。アプリが使うのは QtCore・QtGui・QtWidgets・QtOpenGL・
-QtOpenGLWidgets・QtSvg だけで、PySide6 のフックが拾う QML・Quick・仮想キーボード・PDF・ネットワーク・TLS・Qt の翻訳は
-入れない（`_UNUSED_QT`）。ソフトウェアの OpenGL（`opengl32sw.dll`）は、リモートデスクトップなど GPU の OpenGL が無い時の
-プレビューの予備として残す。フォルダは約 239 MB → 約 211 MB、ファイルは 360 → 243 個（Rust の部品と LightGBM を入れた形。
+使っていない Qt の部品は `ts_smartcut.spec` で外す（2026-10-28）。アプリが使うのは QtCore・QtGui・QtWidgets・
+QtOpenGLWidgets だけで、PySide6 のフックが拾う QML・Quick・仮想キーボード・PDF・ネットワーク・TLS・Qt の翻訳は
+入れない（`_UNUSED_QT`）。フォルダは約 239 MB → 約 211 MB、ファイルは 360 → 243 個（Rust の部品と LightGBM を入れた形。
 残りの大きいものは PySide6 約 75 MB・LightGBM が使う scipy 約 67 MB・numpy 約 28 MB。2026-10-30 に学習を Rust にして
 LightGBM と scipy は使わなくなった（設計書 §31.9「学習を Rust で（④）」）。同じ日に numpy も使わなくなった（「numpy を
 やめる（⑤）」）。`ts_smartcut.spec` の `excludes` で numpy・lightgbm・scipy を外す（作る PC の仮想環境にテスト用の numpy が
@@ -126,6 +125,15 @@ LightGBM と scipy は使わなくなった（設計書 §31.9「学習を Rust 
 無い。大きいものは PySide6 約 75 MB・python314.dll 約 7 MB・libcrypto 約 12 MB））。外した形で固めたプログラムで、
 起動・mpv への接続・録画を開いてプレビューに絵が出る・設定の画面（6 つのタブ）・システム情報・スタイル（windows11）を
 確かめた。Qt の部品を新しく使う時（`import PySide6.Qt…` を足す時）は、`_UNUSED_QT` に入っていないかを見る。
+
+さらに外したもの（2026-11-19）: Python の QtOpenGL・QtSvg（`QtOpenGLWidgets` を読み込んでも QtOpenGL は読み込まれない）、
+ソフトウェアの OpenGL（`opengl32sw.dll`、19.7 MB。リモートデスクトップでも GPU の OpenGL が使えていたので外した。GPU の
+OpenGL が無い PC ではプレビューが映らないことがあり、編集はできる）、使わない画面のプラグイン（Windows は `qwindows` だけ、
+Linux は `wayland`・`xcb` だけ）と画像の形式（ICO だけ。PNG は Qt 本体が読む。Linux はアイコンのテーマが SVG を使うので
+SVG も残す）。Linux では同梱するライブラリの記号を取る（`strip`。`libpython` が 33.6 → 21.1 MB）。Rust の部品も記号を
+取る（`native/Cargo.toml` の `strip`）。Windows のフォルダは 94 → 62 MB、Linux の tar.gz は 52.2 → 46.3 MB。外した形で、
+`tools/make_screenshots.py` を同じ Qt の部品だけで動かし、録画を開いてプレビューに絵が出ること・画面とダイアログの
+全部を確かめた。
 
 OpenSSL も入れない（2026-11-15）。アプリは通信しないので、`excludes` で `ssl`・`_ssl`・`_hashlib` を外す。`hashlib` は Python
 本体の sha1・sha256 を使う（OpenSSL の時と同じ値。キーフレームのキャッシュの名前と記録のハッシュ）。これで Python の

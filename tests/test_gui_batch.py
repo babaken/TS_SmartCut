@@ -237,6 +237,9 @@ def test_refresh_keeps_the_scroll_position(qapp, batch_manager):
 def test_finished_batch_shows_a_summary_instead_of_the_last_progress(qapp, batch_manager):
     # 最後の項目の「自動カットの特徴の計算 82%」が残り、終わったのか分からなかった(2026-10-10)
     view = BatchListView(batch_manager)
+    # 0.3 秒の見回りを止める: 遅い PC ではバッチ中に期限が来て、下の processEvents で先に終わりの
+    # 表示を出し、差し替えた進捗がそれを上書きして落ちた(2026-11-18、WSL)
+    view._status_timer.stop()
     view.add_item(_file_info("a"))
     view.add_item(_file_info("b"))
     view.start()

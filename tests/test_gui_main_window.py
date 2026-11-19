@@ -584,7 +584,7 @@ def test_dropping_a_ts_file_opens_it(window, sample_ts, qapp):
 
 
 @pytest.mark.parametrize(
-    "names", [["video.mp4"], ["a.ts", "b.ts"], ["notes.txt"], ["録画.ts.keyframes.json"]]
+    "names", [["video.mp4"], ["a.ts", "b.ts"], ["notes.txt"]]
 )
 def test_unsupported_drops_are_rejected(window, tmp_path, names):
     paths = [tmp_path / n for n in names]

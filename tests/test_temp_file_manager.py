@@ -45,8 +45,9 @@ def test_locked_run_dir_is_removed_on_exit(tmp_path):
     assert not run_dir.exists()
 
 
-def test_stale_run_dir_and_loose_files_are_removed(tmp_path):
-    # 異常終了で残ったフォルダ(ロックは外れている)と、前の版が直下に残したファイル
+def test_stale_run_dir_is_removed_and_other_files_are_kept(tmp_path):
+    # 異常終了で残ったフォルダ(ロックは外れている)だけを消す。直下のファイルには触れない
+    # (処理ごとのフォルダを使う前の版が直下に残した temp_* を消す処理は 2026-11-19 に外した)
     stale = tmp_path / "run_old"
     stale.mkdir()
     (stale / ".lock").write_bytes(b"")
@@ -56,9 +57,9 @@ def test_stale_run_dir_and_loose_files_are_removed(tmp_path):
 
     summary = remove_stale_temp_files(tmp_path)
 
-    assert (summary.count, summary.total_bytes) == (2, 150)
-    assert not stale.exists() and not (tmp_path / "temp_b.ts").exists()
-    assert (tmp_path / "keep.txt").exists()
+    assert (summary.count, summary.total_bytes) == (1, 100)
+    assert not stale.exists()
+    assert (tmp_path / "temp_b.ts").exists() and (tmp_path / "keep.txt").exists()
 
 
 def test_run_dir_in_use_is_kept(tmp_path):

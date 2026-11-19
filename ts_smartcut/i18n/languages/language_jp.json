@@ -91,7 +91,6 @@
       "features_close_blocked": "自動カットの特徴を計算中のため閉じられません（残り {count} 本、1本 30 秒程度）。\n計算が終わってから閉じてください。",
       "startup_error_title": "TS_SmartCut を起動できません",
       "app_dir_not_writable": "アプリのフォルダに書き込めないため起動しません。\n{path}\n\n設定・自動カットの記録・ログはアプリと同じフォルダに置きます。書き込めるフォルダ（Program Files などではない場所）へアプリを移してください。\n[{code}] {reason}",
-      "config_migration_failed": "前の場所の設定・自動カットの記録をアプリのフォルダへ移せなかったため起動しません。\n{source} → {target}\n\nほかに TS_SmartCut が動いていれば閉じてから、起動し直してください。\n[{code}] {reason}",
       "history_db_title": "自動カットの記録",
       "history_db_error": "自動カットの記録 DB を開けません。\n[{code}] {message}\n\nカットの記録と特徴の計算は行いません（カット処理はこれまでどおり使えます）。",
       "file_not_found": "ファイルが見つかりません: {path}",

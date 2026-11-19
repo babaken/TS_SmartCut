@@ -82,7 +82,8 @@ class TuningCancelled(Exception):
 class TuneSample:
     recording_id: int
     station_key: str
-    features: RecordingFeatures
+    # load_samples は Rust の写しを作ったら None にする(下の native_sample だけが使う)
+    features: Optional[RecordingFeatures]
     truth: List[Tuple[int, int, bool]]
     window: Optional[ProgramWindow]
     _native: object = field(default=None, repr=False)
@@ -138,7 +139,11 @@ def objective(score: Score) -> float:
 
 def load_samples(db, scope_key: str = "", stop_event=None,
                  progress: Optional[Callable[[int, int], None]] = None) -> List[TuneSample]:
-    """補正に使う録画(最後まで計算した特徴と有効なカットのあるもの)。scope_key が局ならその局だけ、'' なら全局。"""
+    """補正に使う録画(最後まで計算した特徴と有効なカットのあるもの)。scope_key が局ならその局だけ、'' なら全局。
+
+    録画ごとに Rust の写し(native_sample)を作ったら Python 側の特徴は捨てる: 両方を持つと全録画の特徴が
+    2 倍になっていた(2026-11-19、記録の写しの 314 本で最大 512 MB → 約 260 MB)。features は None になる。"""
+    native = native_module()
     with db.get_connection() as conn:
         records = [dict(r) for r in conn.execute(
             """
@@ -166,8 +171,10 @@ def load_samples(db, scope_key: str = "", stop_event=None,
             logger.warning("Could not read features: recording_id=%s", r["id"], exc_info=True)
             continue
         window = program_window(r["recording_start"], r["broadcast_start"], r["broadcast_duration"])
-        samples.append(TuneSample(r["id"], station_key(r["original_network_id"], r["service_id"]),
-                                  features, truth, window))
+        sample = TuneSample(r["id"], station_key(r["original_network_id"], r["service_id"]), features, truth, window)
+        sample.native_sample(native)
+        sample.features = None
+        samples.append(sample)
     return samples
 
 

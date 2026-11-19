@@ -170,6 +170,13 @@ def test_tuning_finds_the_silence_level_of_the_station(tmp_path):
     assert changes_to_rows(result)[(KEY, "silence_db")].source == AUTO
 
 
+def test_loaded_samples_keep_only_the_rust_copy(tmp_path):
+    # 両方を持つと全録画の特徴が 2 倍になっていた(2026-11-19)。読み込みで Rust の写しを作り、特徴は捨てる
+    db = _two_quiet_recordings(tmp_path)
+    samples = load_samples(db, KEY)
+    assert samples and all(s.features is None and s._native is not None for s in samples)
+
+
 def test_tuning_never_moves_manual_values(tmp_path):
     db = _two_quiet_recordings(tmp_path)
     rows = {"": {"silence_db": ThresholdRow(-80.0, MANUAL)}}

@@ -128,7 +128,7 @@ def _file_info(path="a.ts"):
                        cuts=[CutRange(0, 100)])
 
 
-def test_project_keeps_the_audio_and_8_2_files_still_open(tmp_path):
+def test_project_keeps_the_audio_and_a_file_without_it_uses_the_first(tmp_path):
     from ts_smartcut.core.project_manager import CURRENT_PROJECT_VERSION, ProjectManager
     from ts_smartcut.models import AppSettings, Project
 
@@ -145,7 +145,7 @@ def test_project_keeps_the_audio_and_8_2_files_still_open(tmp_path):
     assert len(loaded.file_info.audio_tracks) == 2
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    data["version"] = "8.2"
+    # 音声の項目が無いもの(音声を選べなかった頃と同じ形)は最初の音声
     del data["file_info"]["audio_track"], data["file_info"]["audio_tracks"]
     path.write_text(json.dumps(data), encoding="utf-8")
     old = ProjectManager.load_project(path)

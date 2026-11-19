@@ -52,9 +52,12 @@ class MPVController(MPVControllerBase):
         # keep-open: 最後まで再生した(終わりを越えて送った)時にファイルを閉じず、最後の
         # フレームで止まる。既定(no)では閉じて idle になり、位置が取れず(Frame: 0)
         # シークも効かず、固まったように見えた(2026-10-08、GR-B の録画で利用者が発見)。
+        # gpu-hwdec-interop: プレビューは GPU のデコードを使わない(mpv の既定の hwdec=no)のに、描画の準備で
+        # GPU のデコードとの受け渡し(NVIDIA では CUDA など)を用意し、約 200 MB 使っていた(Windows・NVIDIA で
+        # 起動時 435 → 232 MB、2026-11-19)。
         options = {
             "idle": "yes", "keep_open": "yes", "vo": "libmpv", "hr_seek_demuxer_offset": "2",
-            "pause": "yes", "mute": "yes", **self._extra_mpv_options,
+            "pause": "yes", "mute": "yes", "gpu_hwdec_interop": "no", **self._extra_mpv_options,
         }
         try:
             self._mpv = libmpv.Mpv(**options)

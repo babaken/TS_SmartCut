@@ -140,14 +140,6 @@ def remove_stale_temp_files(base: Path) -> StaleTempSummary:
                 logger.warning("Could not delete some leftover temporary files (in use): %d (%s)", left_n, entry)
                 n, size = n - left_n, size - left_size
             count, total = count + n, total + size
-        elif entry.is_file() and entry.name.startswith("temp_"):
-            # 処理ごとのフォルダを使う前の版が直下に残したもの
-            size = entry.stat().st_size
-            try:
-                entry.unlink()
-            except OSError:
-                continue
-            count, total = count + 1, total + size
     if count:
         logger.info("Deleted leftover temporary files: %d, %.1f MB in total (%s)", count, total / 1e6, base)
     return StaleTempSummary(count, total)
