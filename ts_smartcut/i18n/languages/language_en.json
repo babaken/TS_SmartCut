@@ -91,7 +91,6 @@
       "features_close_blocked": "The window cannot be closed while auto-cut features are being computed ({count} left, about 30 s each).\nPlease close it after the computation finishes.",
       "startup_error_title": "TS_SmartCut cannot start",
       "app_dir_not_writable": "TS_SmartCut cannot start because its folder is not writable.\n{path}\n\nSettings, the auto-cut history and logs are kept in the application's folder. Move the application to a writable folder (not Program Files or similar).\n[{code}] {reason}",
-      "config_migration_failed": "TS_SmartCut cannot start because the settings and auto-cut history could not be moved from their previous location to the application's folder.\n{source} → {target}\n\nClose any other running TS_SmartCut and start it again.\n[{code}] {reason}",
       "history_db_title": "Auto-cut history",
       "history_db_error": "Cannot open the auto-cut history database.\n[{code}] {message}\n\nCuts will not be recorded and features will not be computed (cut processing still works).",
       "file_not_found": "File not found: {path}",

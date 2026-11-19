@@ -6,7 +6,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import sys
 import threading
 from pathlib import Path
@@ -15,16 +14,10 @@ from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import QApplication
 
 from ts_smartcut.core.hardware_encoders import get_hardware_encoders
-from ts_smartcut.core.settings_manager import CONFIG_DIR_ENV, SettingsManager, get_config_dir
+from ts_smartcut.core.settings_manager import SettingsManager, get_config_dir
 from ts_smartcut.ffmpeg.wrapper import remove_old_keyframe_caches
 from ts_smartcut.logging_setup import LOGGER_NAME, configure_logging, install_exception_logging
-from ts_smartcut.system.app_dir import (
-    AppDirNotWritableError,
-    ConfigMigrationError,
-    ensure_writable,
-    legacy_config_dir,
-    migrate_legacy_config,
-)
+from ts_smartcut.system.app_dir import AppDirNotWritableError, ensure_writable
 from ts_smartcut.system.child_processes import forget_bundled_qt_paths, restore_library_path_for_children
 
 logger = logging.getLogger(__name__)
@@ -40,35 +33,24 @@ def _resource_icon_path() -> Path:
     return base / "gui" / "resources" / "icon.png"
 
 
-def prepare_config_dir() -> list:
+def prepare_config_dir() -> None:
     """設定・記録 DB・ログのフォルダ(実行ファイルと同じフォルダ)を使えるようにする。
-    書き込めなければ AppDirNotWritableError。前の版の場所(OS 標準の設定フォルダ)に
-    あるものは移す(移したものの名前を返す。失敗は ConfigMigrationError)。"""
-    config_dir = get_config_dir()
-    ensure_writable(config_dir)
-    if os.environ.get(CONFIG_DIR_ENV):
-        return []  # テスト等で場所を変えている時は、利用者の設定に触らない
-    return migrate_legacy_config(legacy_config_dir(), config_dir)
+    書き込めなければ AppDirNotWritableError。(2026-10 までの OS 標準の設定フォルダから移す処理は
+    2026-11-19 に外した。公開した版はどれも最初から実行ファイルの横に置く)"""
+    ensure_writable(get_config_dir())
 
 
-def _show_startup_error(error: Exception) -> None:
+def _show_startup_error(error: AppDirNotWritableError) -> None:
     """起動できない理由を出す(設定・言語ファイルを読めなくても日本語で出す)。"""
     from PySide6.QtWidgets import QMessageBox
 
     from ts_smartcut.i18n.language_manager import LanguageManager
 
-    settings_path = get_config_dir() / "settings.json"
-    if not settings_path.exists():
-        settings_path = legacy_config_dir() / "settings.json"
     try:
-        lang = LanguageManager(SettingsManager.load(settings_path).language)
+        lang = LanguageManager(SettingsManager.load(get_config_dir() / "settings.json").language)
     except Exception:
         lang = LanguageManager()
-    if isinstance(error, AppDirNotWritableError):
-        text = lang.get("messages.app_dir_not_writable", path=error.path, code=error.code, reason=error.reason)
-    else:
-        text = lang.get("messages.config_migration_failed", source=error.source, target=error.target,
-                        code=error.code, reason=error.reason)
+    text = lang.get("messages.app_dir_not_writable", path=error.path, code=error.code, reason=error.reason)
     _app = QApplication.instance() or QApplication(sys.argv)  # メッセージの表示に必要
     QMessageBox.critical(None, lang.get("messages.startup_error_title"), text)
 
@@ -76,16 +58,13 @@ def _show_startup_error(error: Exception) -> None:
 def main() -> int:
     restore_library_path_for_children()
     try:
-        moved = prepare_config_dir()
-    except (AppDirNotWritableError, ConfigMigrationError) as e:
+        prepare_config_dir()
+    except AppDirNotWritableError as e:
         _show_startup_error(e)
         return 1
     settings = SettingsManager.load()
     configure_logging(settings)
     install_exception_logging()
-    if moved:
-        logging.getLogger(LOGGER_NAME).info(
-            "Moved settings and history from %s to %s: %s", legacy_config_dir(), get_config_dir(), ", ".join(moved))
     # ハードウェアエンコーダーの判定(初回起動時のみ実際に判定し、結果を保存する)。
     # 画面の表示を待たせないよう裏で行う。処理開始時に未完了なら完了を待つ。
     threading.Thread(target=get_hardware_encoders, args=(settings,), daemon=True).start()

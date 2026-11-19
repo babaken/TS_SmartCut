@@ -94,36 +94,16 @@ def test_load_missing_required_field_raises_e401(tmp_path):
     assert exc_info.value.code == "E401"
 
 
-def test_version_8_0_cuts_are_converted_to_keep_ranges(tmp_path):
-    # 8.0のcutsは削除する区間。8.1からは残す区間なので補集合になる (2026-10-06)
-    data = _sample_project().to_dict()
-    data["version"] = "8.0"
-    data["file_info"]["cuts"] = [
-        {"start_frame": 0, "end_frame": 1000, "label": None},
-        {"start_frame": 20000, "end_frame": 25000, "label": "CM"},
-    ]
-    path = tmp_path / "old.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-    loaded = ProjectManager.load_project(path)
-
-    assert loaded.version == CURRENT_PROJECT_VERSION
-    assert loaded.file_info.cuts == [CutRange(1000, 20000), CutRange(25000, 54000)]
-
-
-def test_version_8_1_has_no_history_or_excluded_ranges(tmp_path):
-    data = _sample_project().to_dict()
-    data["version"] = "8.1"
-    data.pop("edit_events", None)
-    data["file_info"]["cuts"][0].pop("is_excluded", None)
-    path = tmp_path / "old_8_1.json"
-    path.write_text(json.dumps(data), encoding="utf-8")
-
-    loaded = ProjectManager.load_project(path)
-
-    assert loaded.version == CURRENT_PROJECT_VERSION
-    assert loaded.edit_events == []
-    assert loaded.file_info.cuts[0].is_excluded is False
+def test_pre_release_versions_are_refused(tmp_path):
+    # 8.0〜8.2 の変換は外した(公開前の版だけが書いた。2026-11-19)
+    for version in ("8.0", "8.1", "8.2"):
+        data = _sample_project().to_dict()
+        data["version"] = version
+        path = tmp_path / f"old_{version}.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        with pytest.raises(ProjectError) as exc_info:
+            ProjectManager.load_project(path)
+        assert exc_info.value.code == "E403"
 
 
 def test_edit_history_and_excluded_ranges_round_trip(tmp_path):

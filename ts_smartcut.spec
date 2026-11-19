@@ -40,9 +40,8 @@ a = Analysis(
     hiddenimports=[
         # QOpenGLWidgetを使うpreview_widget.py向け。PyInstallerの静的解析
         # だけでは拾いきれないことがあるため明示。
-        "PySide6.QtOpenGL",
+        # Python の QtOpenGL・QtSvg は使わない (QtOpenGLWidgets を読み込んでも QtOpenGL は読み込まれない。2026-11-19)
         "PySide6.QtOpenGLWidgets",
-        "PySide6.QtSvg",
     ],
     hookspath=[],
     hooksconfig={},
@@ -60,12 +59,31 @@ a = Analysis(
 # QtWidgets・QtOpenGL・QtOpenGLWidgets・QtSvg だけで、PySide6 のフックがそれ以外も拾っていた:
 # QML・Quick・仮想キーボード（入力の部品が引き込む）、PDF（画像の読み込みの部品が引き込む）、ネットワーク・TLS
 # （アプリは通信しない）、Qt の翻訳（QTranslator を使わない。画面の文字は i18n/languages）。
-# opengl32sw.dll（ソフトウェアの OpenGL）は残す: リモートデスクトップなど GPU の OpenGL が無い時のプレビューの予備。
 _UNUSED_QT = (
     "pyside6/qt6qml", "pyside6/qt6quick", "pyside6/qt6virtualkeyboard", "pyside6/plugins/platforminputcontexts/",
     "pyside6/qt6pdf", "pyside6/plugins/imageformats/qpdf",
     "pyside6/qt6network", "pyside6/qtnetwork.", "pyside6/plugins/tls/", "pyside6/plugins/networkinformation/",
     "pyside6/translations/",
+    # 使わない Python の Qt の部品 (2026-11-19、約 9 MB)。Qt6OpenGL は QtOpenGLWidgets が使うので残す
+    "pyside6/qtopengl.", "pyside6/qtsvg.",
+    # ソフトウェアの OpenGL (Windows、19.7 MB)。GPU の OpenGL が無い時のプレビューの予備だったが、リモートデスクトップでも
+    # GPU の OpenGL が使えていたので外す (2026-11-19、利用者の判断)。GPU の OpenGL が無い PC ではプレビューが映らないことがある
+    "pyside6/opengl32sw.dll",
+    # 使わない画面のプラグイン (Windows は qwindows だけ) と画像の形式 (PNG は Qt 本体、ICO だけ残す)。SVG はアイコンの
+    # テーマが使う Linux では残す (2026-11-19)
+    "pyside6/plugins/platforms/qdirect2d", "pyside6/plugins/platforms/qminimal", "pyside6/plugins/platforms/qoffscreen",
+    "pyside6/plugins/generic/qtuiotouchplugin", "pyside6/plugins/iconengines/qsvgicon", "pyside6/plugins/imageformats/qsvg",
+    "pyside6/qt6svg.",
+    "pyside6/plugins/imageformats/qgif", "pyside6/plugins/imageformats/qicns", "pyside6/plugins/imageformats/qjpeg",
+    "pyside6/plugins/imageformats/qtga", "pyside6/plugins/imageformats/qtiff", "pyside6/plugins/imageformats/qwbmp",
+    "pyside6/plugins/imageformats/qwebp",
+    "pyside6/qt/plugins/platforms/libqminimal", "pyside6/qt/plugins/platforms/libqoffscreen",
+    "pyside6/qt/plugins/platforms/libqeglfs", "pyside6/qt/plugins/platforms/libqlinuxfb",
+    "pyside6/qt/plugins/platforms/libqvkkhrdisplay", "pyside6/qt/plugins/egldeviceintegrations/",
+    "pyside6/qt/plugins/imageformats/libqgif", "pyside6/qt/plugins/imageformats/libqicns",
+    "pyside6/qt/plugins/imageformats/libqjpeg", "pyside6/qt/plugins/imageformats/libqtga",
+    "pyside6/qt/plugins/imageformats/libqtiff", "pyside6/qt/plugins/imageformats/libqwbmp",
+    "pyside6/qt/plugins/imageformats/libqwebp",
     # Qt の TLS の部品が求める OpenSSL。PATH の上の別のソフトのもの (Git など) を拾っていた。その部品は上で
     # 外したので、何も読み込まない (2026-11-15)
     "libcrypto-3-x64.dll", "libssl-3-x64.dll",
@@ -147,6 +165,10 @@ def _prune_unused_system_libraries(binaries):
 if sys.platform.startswith("linux"):
     a.binaries = _prune_unused_system_libraries(a.binaries)
 
+# Linux では同梱するライブラリの記号を取る (libpython などに記号が残り大きかった。2026-11-19)。Windows の DLL は記号を
+# 持たないので取らない (strip の道具も無い)
+_STRIP = sys.platform.startswith("linux")
+
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
 exe = EXE(
@@ -157,7 +179,7 @@ exe = EXE(
     name="TS_SmartCut",
     debug=False,
     bootloader_ignore_signals=False,
-    strip=False,
+    strip=_STRIP,
     upx=False,
     console=False,
     # .exeのアイコン。icon.pngからtools/make_icon.pyで作る(Pillow不要)
@@ -169,7 +191,7 @@ coll = COLLECT(
     a.binaries,
     a.zipfiles,
     a.datas,
-    strip=False,
+    strip=_STRIP,
     upx=False,
     upx_exclude=[],
     name="TS_SmartCut",

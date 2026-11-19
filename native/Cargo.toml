@@ -14,3 +14,5 @@ pyo3 = { version = "0.30", features = ["abi3-py310"] }
 [profile.release]
 codegen-units = 1
 lto = true
+# 配布物に記号を入れない (Linux の .so が小さくなる。Windows は記号が .pdb に分かれるので同じ。2026-11-19)
+strip = true

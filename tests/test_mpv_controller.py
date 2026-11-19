@@ -98,6 +98,11 @@ def test_controller_connects_via_real_gl_context(preview):
     assert preview.controller is not None
 
 
+def test_gpu_decoding_interop_is_not_prepared(preview):
+    # プレビューは GPU のデコードを使わないので、受け渡しの用意(約 200 MB)をさせない(2026-11-19)
+    assert preview.controller._mpv.get_property("gpu-hwdec-interop") == "no"
+
+
 def _current_frame_or_none(controller):
     # ファイル読込直後はfps未確定でMPVIPCErrorが出うる（design doc §2、
     # get_current_frame()参照）。ポーリング中は「まだ準備できていない」

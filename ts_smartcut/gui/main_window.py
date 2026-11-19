@@ -101,10 +101,6 @@ THRESHOLDS_MESSAGE_MS = 15000  # しきい値の自動補正の知らせ(バッ�
 
 # メインウィンドウへドロップして開けるファイル(TS録画とプロジェクトファイル)
 DROPPABLE_SUFFIXES = {".ts", ".m2ts", ".mts", ".json"}
-# 録画の隣にできていたキーフレームのキャッシュ(録画.ts.keyframes.json)は.jsonでも
-# プロジェクトではない。ドロップを受け付けるとE403になっていた(Windows実機、2026-10-06)。
-# 今は KeyframeCache/ に作るが、前の版が録画の隣に残したものは利用者が消すまで残る
-KEYFRAME_CACHE_SUFFIX = ".keyframes.json"
 
 # ステータスバーの空き容量の更新間隔(処理中に減っていくのが分かる程度)
 DISK_FREE_REFRESH_MS = 10_000
@@ -1044,11 +1040,7 @@ class MainWindow(QMainWindow):
         """ドロップされたのが開けるファイル1つ(TSかプロジェクト)ならそのパス。"""
         mime = event.mimeData()
         paths = [Path(url.toLocalFile()) for url in mime.urls() if url.isLocalFile()] if mime.hasUrls() else []
-        if (
-            len(paths) == 1
-            and paths[0].suffix.lower() in DROPPABLE_SUFFIXES
-            and not paths[0].name.lower().endswith(KEYFRAME_CACHE_SUFFIX)
-        ):
+        if len(paths) == 1 and paths[0].suffix.lower() in DROPPABLE_SUFFIXES:
             return paths[0]
         return None
 
