@@ -96,7 +96,7 @@ ffmpeg -version                    # 6 or later
 
 `native OK` means the Rust part matches the app; otherwise it names the installed and the required version, and `pip install ./native` fixes it (if it isn't fixed, the app warns with E506 after starting and the automatic cut proposals stop; cut editing and conversion still work). In the app, Help → System Info shows the versions of ffmpeg, mpv and `ts_smartcut_native`. To check the whole app, run the tests (see Development).
 
-Windows details: [docs/TS_SmartCut_Windows_Setup.md](docs/TS_SmartCut_Windows_Setup.md) (in Japanese). `scripts/` has launchers (`run_ts_smartcut.bat` starts without a console window on Windows; `run_ts_smartcut.sh` can be used from a `.desktop` file on Linux).
+Windows details: [docs/TS_SmartCut_Windows_Setup.md](docs/TS_SmartCut_Windows_Setup.md). `scripts/` has launchers (`run_ts_smartcut.bat` starts without a console window on Windows; `run_ts_smartcut.sh` can be used from a `.desktop` file on Linux).
 
 ## Where settings and records live
 
@@ -142,7 +142,7 @@ pip install -e ".[dev]"            # pytest, and numpy (used by the tests only)
 pytest -q -p no:faulthandler   # on Windows, -p no:faulthandler hides a harmless LuaJIT message
 ```
 
-The tests use the real ffmpeg / ffprobe / mpv / Qt instead of mocks. The release files (the Windows installer and the Linux tar.gz) are made with `python build_release.py` ([docs/TS_SmartCut_Packaging.md](docs/TS_SmartCut_Packaging.md), in Japanese).
+The tests use the real ffmpeg / ffprobe / mpv / Qt instead of mocks. The release files (the Windows installer and the Linux tar.gz) are made with `python build_release.py` ([docs/TS_SmartCut_Packaging.md](docs/TS_SmartCut_Packaging.md)).
 
 ## License
 

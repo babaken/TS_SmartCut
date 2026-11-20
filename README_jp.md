@@ -95,7 +95,7 @@ ffmpeg -version                    # 6 以上
 
 `native OK` と出れば Rust の部品がアプリと合っています。合わない時は入っている版と必要な版が出るので、`pip install ./native` で入れ直します（入れ直さないと、起動の後に E506 の知らせが出て自動カットの案が止まります。カットの編集と変換はできます）。アプリでは「ヘルプ → システム情報」で ffmpeg・mpv・`ts_smartcut_native` の版が見られます。アプリ全体を確かめる時はテストを動かします（「開発」を参照）。
 
-Windows の詳しい手順は [docs/TS_SmartCut_Windows_Setup.md](docs/TS_SmartCut_Windows_Setup.md) にあります。`scripts/` に起動用のスクリプトがあります（Windows はコンソールの窓が出ない `run_ts_smartcut.bat`、Linux は `.desktop` から使える `run_ts_smartcut.sh`）。
+Windows の詳しい手順は [docs/TS_SmartCut_Windows_Setup_jp.md](docs/TS_SmartCut_Windows_Setup_jp.md) にあります。`scripts/` に起動用のスクリプトがあります（Windows はコンソールの窓が出ない `run_ts_smartcut.bat`、Linux は `.desktop` から使える `run_ts_smartcut.sh`）。
 
 ## 設定と記録の置き場所
 
@@ -141,7 +141,7 @@ pip install -e ".[dev]"            # pytest と、テストだけで使う numpy
 pytest -q -p no:faulthandler   # Windows では -p no:faulthandler で LuaJIT の害の無い知らせを隠す
 ```
 
-テストは ffmpeg / ffprobe / mpv / Qt をモックせず実物で動かします。配布物（Windows のインストーラー、Linux の tar.gz）は `python build_release.py` で作ります（[docs/TS_SmartCut_Packaging.md](docs/TS_SmartCut_Packaging.md)）。
+テストは ffmpeg / ffprobe / mpv / Qt をモックせず実物で動かします。配布物（Windows のインストーラー、Linux の tar.gz）は `python build_release.py` で作ります（[docs/TS_SmartCut_Packaging_jp.md](docs/TS_SmartCut_Packaging_jp.md)）。
 
 ## ライセンス
 

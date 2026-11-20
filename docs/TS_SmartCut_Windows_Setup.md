@@ -1,47 +1,50 @@
-# TS_SmartCut Windows 実行環境のセットアップ手順
+# TS_SmartCut Windows Setup
 
-対象: Windows PC で TS_SmartCut をソースから動かすための準備（アプリを使うだけの環境）。
-.exe にして配る時は `TS_SmartCut_Packaging.md` の「2. Windows — PyInstallerでの.exe化」を参照
-（.exe なら Python と仮想環境は要らず、下の 1 の 2・3（ffmpeg と mpv）だけを入れる）。
+English | [日本語](TS_SmartCut_Windows_Setup_jp.md)
+
+For: preparing a Windows PC to run TS_SmartCut from source (an environment for using the app, not for developing it).
+To build and distribute an .exe, see "2. Windows — building the .exe with PyInstaller" in
+[TS_SmartCut_Packaging.md](TS_SmartCut_Packaging.md)
+(the .exe needs no Python or virtual environment; install only items 2 and 3 of section 1 below — ffmpeg and mpv).
 
 ============================================================
-## 1. 事前に用意するもの
+## 1. What you need first
 ============================================================
-1. **Python 3.10 以上**（公式インストーラ、"Add python.exe to PATH" を有効にする。3.14.7 で動作確認済み）
-2. **ffmpeg / ffprobe**（6 以降。公式ビルドを展開し、`ffmpeg.exe`/`ffprobe.exe` のあるフォルダを PATH に
-   追加する。chocolatey 等でも可）
-3. **mpv と libmpv（`libmpv-2.dll`）** — 下の「1.1 mpv の入れ方」の手順で入れる。
-   アプリは `libmpv-2.dll`（または `mpv-2.dll`）を PATH（と実行ファイルの隣）から探して読み込むので、
-   **`mpv.exe` だけでは足りない**。chocolatey 版・winget 版（`mpv-player.mpv-CI.MSVC`）の
-   mpv にはこの DLL が入っておらず、読み込みが OSError で失敗した（2026-08、実機。当時は python-mpv の `import mpv`）。
-4. **Git for Windows**（ソースの取得と更新に使う）
+1. **Python 3.10 or later** (the official installer, with "Add python.exe to PATH" turned on; checked with 3.14.7)
+2. **ffmpeg / ffprobe** (6 or later. Extract an official build and add the folder holding `ffmpeg.exe`/`ffprobe.exe` to
+   PATH; Chocolatey and similar also work)
+3. **mpv and libmpv (`libmpv-2.dll`)** — install them as in "1.1 Installing mpv" below.
+   The app looks for `libmpv-2.dll` (or `mpv-2.dll`) on PATH (and next to the executable) and loads it, so
+   **`mpv.exe` alone is not enough**. The Chocolatey and winget (`mpv-player.mpv-CI.MSVC`) packages of mpv
+   don't include this DLL, and loading it failed with OSError (2026-08, on a real PC; then with python-mpv's `import mpv`).
+4. **Git for Windows** (to get and update the source)
 
-### 1.1 mpv の入れ方（shinchiro 氏のビルド）
+### 1.1 Installing mpv (shinchiro's build)
 
-shinchiro 氏の Windows 向けビルド（GitHub の `shinchiro/mpv-winbuild-cmake` の Releases）から、
-**同じ日付の 2 つの 7z** を取る。
+From shinchiro's Windows builds (the Releases of `shinchiro/mpv-winbuild-cmake` on GitHub), take
+**the two 7z files with the same date**.
 
-| ファイル | 中身 | 使うもの |
+| File | Contents | What is used |
 |---|---|---|
-| `mpv-x86_64-v3-<日付>-git-<ハッシュ>.7z` | プレイヤー本体 | `mpv.exe`、`mpv.com`、`d3dcompiler_43.dll` など |
-| `mpv-dev-x86_64-v3-<日付>-git-<ハッシュ>.7z` | 開発用（libmpv） | **`libmpv-2.dll`**（python-mpv が読み込む本体） |
+| `mpv-x86_64-v3-<date>-git-<hash>.7z` | The player | `mpv.exe`, `mpv.com`, `d3dcompiler_43.dll`, etc. |
+| `mpv-dev-x86_64-v3-<date>-git-<hash>.7z` | Development files (libmpv) | **`libmpv-2.dll`** (the library the app loads) |
 
-- `x86_64-v3` は AVX2 のある CPU 向け（Intel 第 4 世代 Haswell 以降、AMD Zen 以降）。古い CPU では
-  `-v3` の付かない `mpv-x86_64-…` と `mpv-dev-x86_64-…` を使う。
-- 2 つの 7z を **同じフォルダ** に展開し（例: `C:\Tools\mpv\`）、そのフォルダを PATH に追加する。
-  winget の mpv のフォルダに上書きして展開しても動くが、winget で mpv を更新すると上書きされて DLL が
-  消えることがあるので、自分のフォルダの方がよい（動作確認時のビルド: v0.41.0-920-gdd5d17d32、2026-08-09）。
-- 確かめ方（新しい PowerShell で、PATH を読み直してから）:
+- `x86_64-v3` is for CPUs with AVX2 (Intel 4th generation Haswell or later, AMD Zen or later). On older CPUs use
+  `mpv-x86_64-…` and `mpv-dev-x86_64-…` without `-v3`.
+- Extract both 7z files into **the same folder** (e.g. `C:\Tools\mpv\`) and add that folder to PATH.
+  Extracting over winget's mpv folder also works, but updating mpv with winget can overwrite it and remove the DLL,
+  so a folder of your own is better (build used for the check: v0.41.0-920-gdd5d17d32, 2026-08-09).
+- To check (in a new PowerShell, after PATH has been reloaded):
 
   ```powershell
-  where.exe libmpv-2.dll     # 展開したフォルダの libmpv-2.dll が出ること
-  mpv --version              # 展開したビルドの版が出ること
+  where.exe libmpv-2.dll     # shows the libmpv-2.dll in the folder you extracted
+  mpv --version              # shows the version of the build you extracted
   ```
 
 ============================================================
-## 2. ソースの取得
+## 2. Getting the source
 ============================================================
-GitHub のリポジトリ（`github.com/babaken/TS_SmartCut`、ブランチ `main`）から clone する:
+Clone the GitHub repository (`github.com/babaken/TS_SmartCut`, branch `main`):
 
 ```powershell
 git clone https://github.com/babaken/TS_SmartCut.git
@@ -49,76 +52,81 @@ cd TS_SmartCut
 ```
 
 ============================================================
-## 3. 仮想環境と依存パッケージ（PowerShell）
+## 3. Virtual environment and packages (PowerShell)
 ============================================================
 ```powershell
-# 仮想環境の作成
+# Create the virtual environment
 python -m venv .venv
 .venv\Scripts\Activate.ps1
 
-# 依存パッケージ（PySide6。libmpv は自作の結び付けで読む（2026-11-15 から python-mpv は不要）。自動カットの計算と学習は Rust の部品で行う（2026-10-30 から LightGBM・
-# numpy は不要。テストと確かめのツールを動かす時だけ `pip install numpy pytest`））
+# Packages (PySide6. libmpv is loaded by the app's own binding (python-mpv is not needed since 2026-11-15). The auto-cut
+# calculations and training are done by the Rust part (LightGBM and numpy are not needed since 2026-10-30; only to run
+# the tests and the checking tools: `pip install numpy pytest`))
 pip install -r requirements.txt
 
-# 確かめ
+# Check
 python -c "import PySide6; print('imports OK')"
 ffmpeg -version
 ffprobe -version
 ```
 
-自動カットの計算の Rust の部分（`native/`。**必須**、2026-10-28。無いと自動カット（特徴の計算・案・自動補正・学習・ロゴ）と
-音声波形が使えない — 起動の後に E506 の知らせが出る。カットの編集・変換はできる）: Rust を入れて（`winget install Rustlang.Rustup`
-か https://rustup.rs/ 。C のリンカーとして Visual Studio Build Tools の「C++ によるデスクトップ開発」が要る）、仮想環境で
+The Rust part of the auto-cut calculations (`native/`. **Required** since 2026-10-28. Without it the auto cut (features, proposals,
+automatic tuning, training, logos) and the audio waveform don't work — an E506 notice appears after start. Cut editing and
+conversion still work): install Rust (`winget install Rustlang.Rustup` or https://rustup.rs/ ; the C linker needs "Desktop
+development with C++" from Visual Studio Build Tools), then in the virtual environment
 
 ```powershell
 pip install .\native
 python -c "import ts_smartcut_native; print(ts_smartcut_native.VERSION)"
 ```
 
-Python で計算していた頃より、特徴の計算は約 2.5 倍、バッチの後のしきい値の自動補正は約 6 倍速い（どちらも Windows で測定）。
-Python の同じ処理は 2026-10-28 に削ったので、入れずに使うことはできない。
-`native/` が変わったら（`git pull` で変わった時も）同じコマンドで入れ直す。
+Compared with when the calculations were in Python, features are about 2.5× faster and the automatic threshold tuning after
+a batch about 6× faster (both measured on Windows). The Python versions were removed on 2026-10-28, so the app can't be used
+without it. Reinstall with the same command whenever `native/` changes (including after a `git pull` that changes it).
 
 ============================================================
-## 4. 起動
+## 4. Starting the app
 ============================================================
-普段は `scripts\run_ts_smartcut.bat` で起動する（エクスプローラーでダブルクリック。デスクトップや
-スタートメニューにショートカットを作ってもよい）。
+Normally start it with `scripts\run_ts_smartcut.bat` (double-click it in Explorer; a shortcut on the desktop or in the
+Start menu also works).
 
-- プロジェクトの `.venv` の `pythonw.exe` で起動するので、仮想環境の有効化は要らず、コンソールの黒い窓も出ない。
-- どこから起動しても、作業フォルダをプロジェクト直下に移してから起動する。
-- 起動しない時は `scripts\run_ts_smartcut.bat /console` で実行すると、エラーがコンソールに出る。
+- It starts with the project's `.venv` `pythonw.exe`, so there is no need to activate the virtual environment, and no black
+  console window appears.
+- Wherever it is started from, it moves the working folder to the project root first.
+- If the app doesn't start, run `scripts\run_ts_smartcut.bat /console` to see the error in a console.
 
-設定（`settings.json`）・自動カットの記録 DB（`cut_history.db`）・ログ（`logs\`）・一時ファイル（`Temp\`）・
-キーフレームのキャッシュ（`KeyframeCache\`）・局ロゴ（`Logo\`）は、プロジェクト直下に作られる。
-書き込めないフォルダに置くと起動しない（E505）。
+Settings (`settings.json`), the auto-cut history DB (`cut_history.db`), logs (`logs\`), temporary files (`Temp\`),
+the keyframe cache (`KeyframeCache\`) and station logos (`Logo\`) are created in the project root.
+In a folder that can't be written to, the app doesn't start (E505).
 
 ============================================================
-## 5. 更新
+## 5. Updating
 ============================================================
-PowerShell で:
+In PowerShell:
 
 ```powershell
 cd TS_SmartCut
 .venv\Scripts\Activate.ps1
 git pull
-pip install -r requirements.txt   # 依存パッケージが変わった時のため
-pip install .\native              # git pull の表示に native/ があった時（下の確かめで合わないと出た時も）
+pip install -r requirements.txt   # in case the packages changed
+pip install .\native              # when git pull listed native/ (or when the check below says it doesn't match)
 ```
 
-`native\` の作り直しには数分かかる。動いているアプリは古い部品のまま動くので、終わってから起動し直す。
+Rebuilding `native\` takes a few minutes. A running app keeps using the old part, so restart it afterwards.
 
-### 確かめ
+### Checking
 
 ```powershell
 python -c "from ts_smartcut.autocut.native import native_problem as p; print(p() or 'native OK')"
-ffmpeg -version                    # 6 以上
+ffmpeg -version                    # 6 or later
 ```
 
-- `native OK` と出れば Rust の部品がアプリと合っている。合わない時は入っている版と必要な版が出るので、`pip install .\native` で入れ直す。
-- アプリを起動し直し、起動の後に E506 の知らせが出ないこと、「ヘルプ → システム情報」に ffmpeg・mpv・`ts_smartcut_native` の版が出ることを見る。
-- 録画を 1 本開いて自動カットの案が出ること、短い区間をバッチで変換できることを見れば、普段の使い方は確かめられる。
-- アプリ全体を確かめる時はテストを動かす（実物の ffmpeg・mpv・Qt を使う。10 分ほど）:
+- `native OK` means the Rust part matches the app. If it doesn't, the installed and the required versions are shown;
+  reinstall with `pip install .\native`.
+- Restart the app and check that no E506 notice appears after start, and that "Help → System Info" shows the versions
+  of ffmpeg, mpv and `ts_smartcut_native`.
+- Opening a recording and seeing auto-cut proposals, and converting a short range in the batch, checks everyday use.
+- To check the whole app, run the tests (they use the real ffmpeg, mpv and Qt; about 10 minutes):
 
 ```powershell
 pip install -e ".[dev]"
@@ -126,10 +134,10 @@ python -m pytest -q -p no:faulthandler
 ```
 
 ============================================================
-## 6. うまく動かない時
+## 6. Troubleshooting
 ============================================================
-- **プレビューが出ない（「mpv: 利用不可（プレビュー制限モード）」と出る）**: まず `where.exe libmpv-2.dll` を確かめる。アプリは mpv が無くても
-  起動し、カット編集はできる。
-- **起動しない**: `scripts\run_ts_smartcut.bat /console` でエラーを見る。ログは `logs\ts_smartcut.log`。
-- **終了時にまれに落ちる**: Windows では終了時にまれに（数 % 程度）クラッシュすることがある（libmpv 側の
-  問題と考えられる）。終了時だけで、編集中やエンコード中には起きない。
+- **No preview ("mpv: unavailable (preview-limited mode)" is shown)**: first check `where.exe libmpv-2.dll`. The app starts
+  without mpv, and cut editing works.
+- **The app doesn't start**: see the error with `scripts\run_ts_smartcut.bat /console`. The log is `logs\ts_smartcut.log`.
+- **A rare crash on exit**: on Windows the app can rarely (a few percent) crash on exit (thought to be on the libmpv side).
+  It happens only on exit, never while editing or encoding.

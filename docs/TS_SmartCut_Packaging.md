@@ -1,32 +1,31 @@
-# TS_SmartCut パッケージ化手順
+# TS_SmartCut Packaging
 
-対象: Phase 0〜10完了後のTS_SmartCutを、Linuxではアプリランチャー
-ショートカットとして、Windowsでは配布可能な.exeとして配布する手順。
+English | [日本語](TS_SmartCut_Packaging_jp.md)
 
-外部ツール（ffmpeg/ffprobe/mpv）は同梱せず、実行環境に別途インストールして
-PATHに通しておく前提（判断: 2026-08-21）。同梱する場合はライセンス文書の
-添付が必要になる点に注意（ffmpeg/mpvはビルドによりLGPL/GPL）。
+For: distributing TS_SmartCut (after phases 0–10) as an application launcher shortcut on Linux and as a distributable
+.exe on Windows.
+
+The external tools (ffmpeg/ffprobe/mpv) are not bundled; they are installed separately where the app runs and put on
+PATH (decided 2026-08-21). Bundling them would require including their license texts (ffmpeg/mpv are LGPL or GPL
+depending on the build).
 
 ============================================================
-## 1. Linux — デスクトップランチャー
+## 1. Linux — desktop launcher
 ============================================================
 
-以下の2ファイルを作成済み:
+These two files exist:
 
-- `scripts/run_ts_smartcut.sh` — プロジェクトの`.venv`内Pythonで
-  `ts_smartcut.main`を起動するラッパースクリプト。`cd`でプロジェクト
-  ルートに明示的に移動してから`python -m ts_smartcut.main`を実行する
-  （KDE Plasma 6のKickoff等、`systemd-run --user --scope`経由で起動される
-  場合はCWDがプロジェクトルートにならず`ModuleNotFoundError`になることを
-  実機で確認したため、CWD非依存にした）。
-- `~/.local/share/applications/ts_smartcut.desktop` — アプリケーション
-  メニューに表示される起動エントリ（`Exec=`が上記ラッパーを指す。
-  `Path=`もプロジェクトルートを明示、`Icon=`は下記アイコン参照）
+- `scripts/run_ts_smartcut.sh` — a wrapper that starts `ts_smartcut.main` with the Python in the project's `.venv`.
+  It `cd`s to the project root explicitly before running `python -m ts_smartcut.main` (when started through
+  `systemd-run --user --scope`, as KDE Plasma 6's Kickoff does, the working directory was not the project root and the
+  start failed with `ModuleNotFoundError` on a real PC, so the script doesn't depend on it).
+- `~/.local/share/applications/ts_smartcut.desktop` — the entry shown in the application menu (`Exec=` points to the
+  wrapper above, `Path=` gives the project root, `Icon=` see the icon below).
 
-再セットアップが必要な場合:
+To set it up again:
 ```bash
 chmod +x scripts/run_ts_smartcut.sh
-# ts_smartcut.desktop はリポジトリに無いので、別環境では作る（<repo> はプロジェクトの絶対パス）
+# ts_smartcut.desktop is not in the repository; create it on another PC (<repo> is the project's absolute path)
 cat > ~/.local/share/applications/ts_smartcut.desktop <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -37,233 +36,244 @@ Icon=<repo>/ts_smartcut/gui/resources/icon.png
 Terminal=false
 Categories=AudioVideo;Video;
 EOF
-update-desktop-database ~/.local/share/applications   # メニューキャッシュ更新
-kbuildsycoca6 --noincremental                          # KDEのアプリ一覧キャッシュ更新（KDE環境の場合）
+update-desktop-database ~/.local/share/applications   # refresh the menu cache
+kbuildsycoca6 --noincremental                          # refresh KDE's application list cache (on KDE)
 ```
 
-### アイコン（1ファイルに統一）
+### Icon (one file)
 
-アイコンの実体は`ts_smartcut/gui/resources/icon.png`（プロジェクト同梱、
-Gitで管理される唯一のソース）**1つだけ**。以下2箇所がこの同じファイルを
-指す構成にしている（コピーは作らない）:
+The icon is **only** `ts_smartcut/gui/resources/icon.png` (in the project, the one source kept in Git). Both places
+below point to this same file (no copies):
 
-- `.desktop`の`Icon=`は絶対パスでこのファイルを直接指す
-  （`Icon=/path/to/TS_SmartCut/ts_smartcut/gui/resources/icon.png`）
-  → Kickoff等のアプリ一覧に表示される
-- `ts_smartcut/main.py`の`app.setWindowIcon(QIcon(...))`も同じファイルを
-  読み込む → 実行中ウィンドウ・タスクバーのアイコン
+- The `.desktop` file's `Icon=` points to it with an absolute path
+  (`Icon=/path/to/TS_SmartCut/ts_smartcut/gui/resources/icon.png`)
+  → shown in application lists such as Kickoff
+- `app.setWindowIcon(QIcon(...))` in `ts_smartcut/main.py` loads the same file → the icon of the running window and the
+  taskbar
 
-差し替える場合は`ts_smartcut/gui/resources/icon.png`を上書きするだけで
-両方に反映される（`.desktop`側は絶対パス参照なので再配置不要。ただし
-KDEのアプリ一覧サムネイルはキャッシュされるため、見た目が変わらない
-場合は`kbuildsycoca6 --noincremental`でキャッシュ更新する）。
+To replace it, overwrite `ts_smartcut/gui/resources/icon.png` and both change (the `.desktop` file uses an absolute
+path, so nothing has to move; KDE caches the application list's icons, so if it doesn't change, refresh the cache with
+`kbuildsycoca6 --noincremental`).
 
-Windows（2026-10-06）:
-- タスクバー: `pythonw.exe`で起動するとタスクバーにPythonのアイコンが出ていた
-  （Windowsはプロセスを起動元の実行ファイルの仲間として扱う）。`main.py`が
-  ウィンドウを作る前に`SetCurrentProcessExplicitAppUserModelID("babaken.TS_SmartCut")`
-  を呼び、`setWindowIcon()`のアイコンが出るようにした（画面を撮って確認済み）。
-- .exe: `ts_smartcut/gui/resources/icon.ico`を`ts_smartcut.spec`の`icon=`に指定。
-  `.ico`は`icon.png`から`tools/make_icon.py`で作る（16〜256pxのPNGを入れたICO、
-  Pillow不要）。`icon.png`を差し替えたら`python tools/make_icon.py`も実行し直す。
+Windows (2026-10-06):
+- Taskbar: started with `pythonw.exe`, the taskbar showed Python's icon (Windows groups a process with the executable
+  that started it). `main.py` calls `SetCurrentProcessExplicitAppUserModelID("babaken.TS_SmartCut")` before creating
+  the window, so the icon from `setWindowIcon()` is shown (checked with a screenshot).
+- .exe: `ts_smartcut/gui/resources/icon.ico` is given as `icon=` in `ts_smartcut.spec`. The `.ico` is made from
+  `icon.png` by `tools/make_icon.py` (an ICO holding 16–256 px PNGs, no Pillow needed). After replacing `icon.png`, run
+  `python tools/make_icon.py` again.
 
-なお、Wayland環境ではタスクバー/ウィンドウ切替のアイコンは`.desktop`の
-`Icon=`だけでは反映されず、アプリ自身がQtの`app.setDesktopFileName()`で
-自分の`.desktop`ファイル名（拡張子抜き）と紐付ける必要があった
-（`main.py`で対応済み。実機で「メニューのアイコンは出るが実行中の
-タスクバーアイコンは汎用フォールバックのまま」という食い違いを確認して
-対処した）。
+On Wayland the taskbar / window switcher icon doesn't follow the `.desktop` file's `Icon=` alone: the app itself has to
+link itself to its `.desktop` file name (without the extension) with Qt's `app.setDesktopFileName()` (done in `main.py`,
+after seeing on a real PC that the menu showed the icon while the running app's taskbar icon stayed the generic one).
 
-動作確認: `scripts/run_ts_smartcut.sh`を直接実行し、ウィンドウが起動し
-ログ（当時は`~/.config/ts_smartcut/logs/ts_smartcut.log`。2026-10-12 からはプロジェクト直下の
-`logs/ts_smartcut.log`）に`mpvへ接続しました`（2026-10-13 からログは英語で`Connected to mpv`）が出ること、スクリーンショットでタスクバーに
-アイコンが表示されることを確認済み。
+Checked: running `scripts/run_ts_smartcut.sh` directly opens the window, the log (then
+`~/.config/ts_smartcut/logs/ts_smartcut.log`; since 2026-10-12 `logs/ts_smartcut.log` in the project root) shows the
+mpv connection (in English since 2026-10-13: `Connected to mpv`), and a screenshot shows the icon in the taskbar.
 
-### Windows — 起動バッチ（.exe化しない場合）
-`scripts/run_ts_smartcut.bat` — `run_ts_smartcut.sh`のWindows版。プロジェクト
-直下に`cd`してから、`.venv\Scripts\pythonw.exe -m ts_smartcut.main`を
-`start`で起動する（コンソール窓なし）。`/console`を付けると`python.exe`で
-起動してコンソールにエラーを表示し、終了後に`pause`する。`.venv`が無ければ
-その旨を表示する。cmd.exeは.batをANSIコードページ(cp932)で読むので、中身は
-ASCIIのみにしてある。改行はCRLF（`.gitattributes`で固定）。動作確認
-(2026-10-05、Windows 11): 別フォルダから実行してウィンドウが開き、ログに
-`TS_SmartCut起動`・`mpvへ接続しました`が出ることを確認（今のログは英語で`TS_SmartCut started`・`Connected to mpv`）。
+### Windows — start script (without an .exe)
+`scripts/run_ts_smartcut.bat` — the Windows version of `run_ts_smartcut.sh`. It `cd`s to the project root and starts
+`.venv\Scripts\pythonw.exe -m ts_smartcut.main` with `start` (no console window). With `/console` it starts
+`python.exe`, shows errors in the console and `pause`s after exit. If there is no `.venv` it says so. cmd.exe reads .bat
+files in the ANSI code page (cp932), so the file is ASCII only, with CRLF line ends (fixed by `.gitattributes`).
+Checked (2026-10-05, Windows 11): run from another folder, the window opens and the log shows the start and the mpv
+connection (now in English: `TS_SmartCut started`, `Connected to mpv`).
 
 ============================================================
-## 2. Windows — PyInstallerでの.exe化
+## 2. Windows — building the .exe with PyInstaller
 ============================================================
 
-### 2.1 使うファイル
-`ts_smartcut.spec`（プロジェクトルート）— Linux/Windows共通のビルド定義。
-`--onedir`形式（フォルダ配布。起動が速く、PySide6公式にも推奨される形式。
-`--onefile`は起動のたびに一時展開が挟まり数秒遅くなる上、Qtアプリでは
-不安定という報告もあるため採用しない）。
+### 2.1 Files used
+`ts_smartcut.spec` (project root) — the build definition shared by Linux and Windows. It uses the `--onedir` form
+(a folder; starts fast and is the form PySide6 recommends. `--onefile` unpacks to a temporary folder on every start,
+which adds a few seconds, and is reported to be unstable with Qt apps, so it is not used).
 
-### 2.2 事前準備（Windows側、PowerShell）
-`TS_SmartCut_Windows_Setup.md`の手順でソースから動く状態が前提。
-それに加えて:
+### 2.2 Preparation (Windows, PowerShell)
+The app must already run from source as in [TS_SmartCut_Windows_Setup.md](TS_SmartCut_Windows_Setup.md).
+In addition:
 ```powershell
 cd C:\path\to\TS_SmartCut
 .venv\Scripts\Activate.ps1
-pip install -e ".[build]"     # pyinstaller>=6.0 を追加インストール
+pip install -e ".[build]"     # adds pyinstaller>=6.0
 ```
 
-### 2.3 ビルド
+### 2.3 Building
 ```powershell
 pyinstaller ts_smartcut.spec --noconfirm
 ```
-出力: `dist\TS_SmartCut\`フォルダ（中に`TS_SmartCut.exe`と`_internal\`）。
-このフォルダごとZIP圧縮して配布する。
+Output: the `dist\TS_SmartCut\` folder (holding `TS_SmartCut.exe` and `_internal\`).
+Distribute the whole folder as a ZIP.
 
-使っていない Qt の部品は `ts_smartcut.spec` で外す（2026-10-28）。アプリが使うのは QtCore・QtGui・QtWidgets・
-QtOpenGLWidgets だけで、PySide6 のフックが拾う QML・Quick・仮想キーボード・PDF・ネットワーク・TLS・Qt の翻訳は
-入れない（`_UNUSED_QT`）。フォルダは約 239 MB → 約 211 MB、ファイルは 360 → 243 個（Rust の部品と LightGBM を入れた形。
-残りの大きいものは PySide6 約 75 MB・LightGBM が使う scipy 約 67 MB・numpy 約 28 MB。2026-10-30 に学習を Rust にして
-LightGBM と scipy は使わなくなった（設計書 §31.9「学習を Rust で（④）」）。同じ日に numpy も使わなくなった（「numpy を
-やめる（⑤）」）。`ts_smartcut.spec` の `excludes` で numpy・lightgbm・scipy を外す（作る PC の仮想環境にテスト用の numpy が
-入っていても同梱しない）。作って測ると、学習を Rust にした後 約 137 MB、numpy も外した後 約 108 MB（2026-10-30、`_internal\` に numpy・scipy・lightgbm は
-無い。大きいものは PySide6 約 75 MB・python314.dll 約 7 MB・libcrypto 約 12 MB））。外した形で固めたプログラムで、
-起動・mpv への接続・録画を開いてプレビューに絵が出る・設定の画面（6 つのタブ）・システム情報・スタイル（windows11）を
-確かめた。Qt の部品を新しく使う時（`import PySide6.Qt…` を足す時）は、`_UNUSED_QT` に入っていないかを見る。
+Unused Qt parts are left out by `ts_smartcut.spec` (2026-10-28). The app uses only QtCore, QtGui, QtWidgets and
+QtOpenGLWidgets; QML, Quick, the virtual keyboard, PDF, networking, TLS and Qt's translations, which PySide6's hooks pick
+up, are not included (`_UNUSED_QT`). The folder went from about 239 MB to about 211 MB and from 360 to 243 files (with
+the Rust part and LightGBM; the large remaining parts were PySide6 about 75 MB, scipy (used by LightGBM) about 67 MB and
+numpy about 28 MB. On 2026-10-30 training moved to Rust and LightGBM and scipy were no longer used (design §31.9
+"training in Rust (④)"); the same day numpy was dropped as well ("dropping numpy (⑤)"). The `excludes` in
+`ts_smartcut.spec` leave out numpy, lightgbm and scipy (even when the build PC's virtual environment has numpy for the
+tests). Measured builds: about 137 MB after training moved to Rust, about 108 MB after numpy was also left out
+(2026-10-30; no numpy, scipy or lightgbm in `_internal\`; the large parts are PySide6 about 75 MB, python314.dll about
+7 MB and libcrypto about 12 MB)). With the parts left out, the built program was checked for: start, connecting to mpv,
+opening a recording with a picture in the preview, the settings window (6 tabs), System Info and the style (windows11).
+When a new Qt part is used (an added `import PySide6.Qt…`), check that it isn't in `_UNUSED_QT`.
 
-さらに外したもの（2026-11-19）: Python の QtOpenGL・QtSvg（`QtOpenGLWidgets` を読み込んでも QtOpenGL は読み込まれない）、
-ソフトウェアの OpenGL（`opengl32sw.dll`、19.7 MB。リモートデスクトップでも GPU の OpenGL が使えていたので外した。GPU の
-OpenGL が無い PC ではプレビューが映らないことがあり、編集はできる）、使わない画面のプラグイン（Windows は `qwindows` だけ、
-Linux は `wayland`・`xcb` だけ）と画像の形式（ICO だけ。PNG は Qt 本体が読む。Linux はアイコンのテーマが SVG を使うので
-SVG も残す）。Linux では同梱するライブラリの記号を取る（`strip`。`libpython` が 33.6 → 21.1 MB）。Rust の部品も記号を
-取る（`native/Cargo.toml` の `strip`）。Windows のフォルダは 94 → 62 MB、Linux の tar.gz は 52.2 → 46.3 MB。外した形で、
-`tools/make_screenshots.py` を同じ Qt の部品だけで動かし、録画を開いてプレビューに絵が出ること・画面とダイアログの
-全部を確かめた。
+Also left out (2026-11-19): the Python modules QtOpenGL and QtSvg (importing `QtOpenGLWidgets` doesn't load QtOpenGL),
+the software OpenGL (`opengl32sw.dll`, 19.7 MB; GPU OpenGL worked even over Remote Desktop, so it was left out. On a PC
+without GPU OpenGL the preview may not show a picture; editing still works), unused platform plugins (Windows keeps only
+`qwindows`, Linux only `wayland` and `xcb`) and image formats (only ICO; PNG is read by Qt itself; Linux also keeps SVG
+because icon themes use it). On Linux the bundled libraries are stripped (`strip`; `libpython` 33.6 → 21.1 MB). The Rust
+part is stripped too (`strip` in `native/Cargo.toml`). The Windows folder went from 94 to 62 MB, the Linux tar.gz from
+52.2 to 46.3 MB. With the parts left out, `tools/make_screenshots.py` was run with only the same Qt parts and checked:
+a recording opens with a picture in the preview, and every screen and dialog appears.
 
-OpenSSL も入れない（2026-11-15）。アプリは通信しないので、`excludes` で `ssl`・`_ssl`・`_hashlib` を外す。`hashlib` は Python
-本体の sha1・sha256 を使う（OpenSSL の時と同じ値。キーフレームのキャッシュの名前と記録のハッシュ）。これで Python の
-`libcrypto-3.dll`・`libssl-3.dll` が入らない。Qt の TLS の部品が求める `libcrypto-3-x64.dll`・`libssl-3-x64.dll` は、PATH の上の
-別のソフト（Git など）のものを拾っていて、.exe の中では何も読み込んでいなかったので、`_UNUSED_QT` で外す。フォルダは
-107 MB → 94 MB、ファイルは 117 → 111 個（Python 3.14.10・PySide6 6.11.2）。外した形で起動・mpv への接続を確かめた。
-Python 3.15 は今は使わない（2026-11-15）: 3.15 で使える PySide6 6.12.0 は `builtins.__import__` を置き換えるため、3.15 の
-遅延 import（`lazy from …`）が中身に替わらず、`concurrent.futures.ThreadPoolExecutor` が呼べない（自動補正の並列が失敗する。
-`tests/test_native.py` の 2 件）。PySide6 の新しい版が出たら、テストと .exe で確かめ直す。
+OpenSSL is not included either (2026-11-15). The app doesn't communicate, so `excludes` leaves out `ssl`, `_ssl` and
+`_hashlib`. `hashlib` uses Python's own sha1 and sha256 (the same values as with OpenSSL; used for the keyframe cache
+names and the history hashes). This keeps Python's `libcrypto-3.dll` and `libssl-3.dll` out. The `libcrypto-3-x64.dll`
+and `libssl-3-x64.dll` that Qt's TLS part asks for were picked up from other software on PATH (Git, for example) and
+nothing in the .exe loaded them, so `_UNUSED_QT` leaves them out. The folder went from 107 MB to 94 MB and from 117 to
+111 files (Python 3.14.10, PySide6 6.11.2). With them left out, start and connecting to mpv were checked.
+Python 3.15 is not used for now (2026-11-15): PySide6 6.12.0, which works with 3.15, replaces `builtins.__import__`, so
+3.15's lazy imports (`lazy from …`) are not replaced by the real objects and `concurrent.futures.ThreadPoolExecutor`
+can't be called (the parallel automatic tuning fails; 2 tests in `tests/test_native.py`). When a new PySide6 comes out,
+check again with the tests and the .exe.
 
-### 2.4 動作確認
+### 2.4 Checking
 ```powershell
 cd dist\TS_SmartCut
 .\TS_SmartCut.exe
 ```
-- ウィンドウが起動し、メニュー・カット編集操作ができるか
-- 動画を開いてプレビューが実描画されるか（mpv-2.dll/libmpv-2.dllが
-  PATH上にあることが前提。無い場合はTS_SmartCut_Windows_Setup.md §1.1の
-  手順でインストールしたビルドのフォルダをPATHに追加する）
-- 設定・記録 DB・ログが`.exe`と同じフォルダ（`settings.json`・`cut_history.db`・`logs\`）に正しく作られるか
-  （2026-10-12 までは`%APPDATA%\ts_smartcut\`。Program Files など書き込めない場所では起動しない）
-- 日本語/英語メニューがどちらも文字化けなく表示されるか
-  （`_internal\ts_smartcut\i18n\languages\*.json`が同梱されていることを
-  Linux側の事前検証で確認済み。`language_manager.py`は`sys.frozen`時に
-  `sys._MEIPASS`基準でこのパスを解決するよう対応済み）
-- 自動カットの学習（A8、2026-10-26。2026-10-30 から Rust の部品で学習する）: 設定の「自動カット」→「学習」で
-  「学習し直す」ができるか。`_internal\` に `lightgbm`・`scipy` が入っていないか（入っていれば作る PC の仮想環境から消す）
-- 自動カットの計算の Rust の部分（`native/`、2026-10-27。**2026-10-28 から必須**）: ビルドする仮想環境に `pip install .\native`
-  で入れておくと、`ts_smartcut_native` が同梱される（`ts_smartcut.spec` は直さなくてよい。`_internal\ts_smartcut_native\` に `.pyd`）。
-  入れずに作ると、起動の後に E506 の知らせが出て、自動カット（特徴の計算・案・自動補正・学習・ロゴ）と音声波形が使えない。システム情報に「ts_smartcut_native <版>」(2026-11-18 の 0.1.3 から 11)と
-  出るか、自動補正のログが「N threads」か。2026-10-28 に、入れて作った .exe と同じ環境で固めた確認用のプログラムで、
-  特徴の計算（Rust で約 10 秒、当時の Python で約 30 秒。2.1 GB の録画）と自動補正（記録 DB の写し 314 本）が Rust で動き、
-  Python と同じ値になることを確かめた
+- The window opens; the menus and cut editing work
+- A video opens and the preview actually draws (needs mpv-2.dll/libmpv-2.dll on PATH; if missing, add the folder of the
+  build installed as in TS_SmartCut_Windows_Setup.md §1.1 to PATH)
+- Settings, the history DB and logs are created in the `.exe`'s folder (`settings.json`, `cut_history.db`, `logs\`)
+  (until 2026-10-12 `%APPDATA%\ts_smartcut\`; in a folder that can't be written to, such as Program Files, the app
+  doesn't start)
+- The Japanese and English menus both show without garbled text
+  (that `_internal\ts_smartcut\i18n\languages\*.json` is bundled was checked beforehand on Linux; `language_manager.py`
+  resolves this path from `sys._MEIPASS` when `sys.frozen`)
+- Auto-cut training (A8, 2026-10-26; trained by the Rust part since 2026-10-30): "Retrain" works under Settings →
+  "Auto Cut" → "Learning". `_internal\` holds no `lightgbm` or `scipy` (if it does, remove them from the build PC's
+  virtual environment)
+- The Rust part of the auto-cut calculations (`native/`, 2026-10-27; **required since 2026-10-28**): installed in the
+  build's virtual environment with `pip install .\native`, `ts_smartcut_native` is bundled (no change to
+  `ts_smartcut.spec` needed; the `.pyd` is in `_internal\ts_smartcut_native\`). Built without it, an E506 notice appears
+  after start and the auto cut (features, proposals, automatic tuning, training, logos) and the audio waveform don't
+  work. Check that System Info shows "ts_smartcut_native <version>" (11 since 0.1.3 on 2026-11-18), or that the automatic
+  tuning log says "N threads". On 2026-10-28, with a check program frozen in the same environment as the .exe built with
+  it, the features (about 10 s in Rust, then about 30 s in Python, for a 2.1 GB recording) and the automatic tuning (a
+  copy of the history DB, 314 recordings) ran in Rust and gave the same values as Python
 
-### 2.5 Linux側で事前検証済みの内容（今回のセッションで実施）
-実際のWindows実行体はビルドできない（クロスコンパイル不可）ため、
-`ts_smartcut.spec`をLinux上で一度ビルド・実行し、以下を確認済み:
-- `pyinstaller ts_smartcut.spec`がエラーなく完走する
-- PySide6（QtOpenGL/QtOpenGLWidgets含む）のhiddenimportsが過不足ないこと
-- i18n JSON（`language_jp.json`/`language_en.json`）が`_internal/`配下に
-  正しい相対構造で同梱され、frozen時のパス解決コード
-  （`ts_smartcut/i18n/language_manager.py`）がそれを正しく見つけること
-- ビルドした実行体を起動し、ログに`TS_SmartCut起動`
-  `mpvへ接続しました`が記録され、6秒間クラッシュせず起動し続けること
-  （今のログは英語で`TS_SmartCut started`・`Connected to mpv`）
+### 2.5 Checked beforehand on Linux (in that session)
+A real Windows executable can't be built there (no cross-compiling), so `ts_smartcut.spec` was built and run once on
+Linux and these were checked:
+- `pyinstaller ts_smartcut.spec` completes without errors
+- PySide6's hiddenimports (including QtOpenGL/QtOpenGLWidgets) are neither missing nor extra
+- The i18n JSON files (`language_jp.json`/`language_en.json`) are bundled under `_internal/` with the right relative
+  layout, and the frozen-path code (`ts_smartcut/i18n/language_manager.py`) finds them
+- The built executable starts, logs the start and the mpv connection, and keeps running for 6 seconds without crashing
+  (now in English: `TS_SmartCut started`, `Connected to mpv`)
 
-Windows固有で追加確認が必要な項目（Linuxでは検証不能）:
-- `mpv-2.dll`/`libmpv-2.dll`実体がPATH経由で正しく見つかるか
-  （アプリ（`ts_smartcut/mpv/libmpv.py`、2026-11-15 までは python-mpv）はctypes経由でこのDLLを探すため、PyInstallerの静的解析では
-  検出されず、`binaries=[]`のまま=未同梱。TS_SmartCut_Windows_Setup.md通り
-  実行環境側にインストールしPATHに置く前提）
-- Windows Defender等が未署名exeを誤検知しないか（PyInstaller製exeは
-  誤検知されることがある。署名は現時点で未対応）
-- GPUエンコーダ（QSV/NVENC）が.exe化後も`ffmpeg/gpu.py`から正しく検出されるか
+Windows-only items to check (can't be checked on Linux):
+- Whether `mpv-2.dll`/`libmpv-2.dll` is found through PATH
+  (the app (`ts_smartcut/mpv/libmpv.py`; python-mpv until 2026-11-15) looks for this DLL through ctypes, so PyInstaller's
+  static analysis doesn't find it and `binaries=[]` stays empty = not bundled. It is installed on PATH where the app runs,
+  as in TS_SmartCut_Windows_Setup.md)
+- Whether Windows Defender and similar flag the unsigned exe (PyInstaller executables are sometimes flagged; signing is
+  not done for now)
+- Whether `ffmpeg/gpu.py` still detects the GPU encoders (QSV/NVENC) in the .exe
 
-### 2.6 既知の未対応項目
-- コード署名なし。
-- **Windows で .exe を作って 2.4 の確認を全部した記録は無い**（2026-10-17 時点）。2026-10-28 に、Rust の部分を入れた .exe が
-  起動し、記録 DB を .exe の横に作って mpv につながることと、上の Rust の部分の確認はした。しきい値の自動補正の並列処理は
-  2026-10-28 からスレッドだけ（`multiprocessing` の spawn と `main.py` の `freeze_support()` は削った）。配る前に 2.3・2.4 を行う。
-- Linux の PyInstaller の出力も、2026-11-15 から配布物にする（下の 3）。Linux の配布物は、Linux の PC で作って確かめる。
+### 2.6 Known open items
+- No code signing.
+- **There is no record of building the .exe on Windows and doing every check in 2.4** (as of 2026-10-17). On 2026-10-28
+  it was checked that the .exe with the Rust part starts, creates the history DB next to the .exe and connects to mpv,
+  plus the Rust part checks above. The parallel automatic threshold tuning uses threads only since 2026-10-28
+  (`multiprocessing`'s spawn and `freeze_support()` in `main.py` were removed). Do 2.3 and 2.4 before distributing.
+- The Linux PyInstaller output is also distributed since 2026-11-15 (3 below). Build and check the Linux release on a
+  Linux PC.
 
-## 3. 配布物（インストーラー）— `build_release.py`（2026-11-15）
+## 3. Release files (installers) — `build_release.py` (2026-11-15)
 
-PyInstaller（`ts_smartcut.spec`）の後に、Windows はインストーラー、Linux は tar.gz を作り、それぞれに SHA-256 の
-`.sha256` を添える。版は `ts_smartcut/__init__.py` の `__version__`。README.md・README_jp.md・LICENSE・
-THIRD_PARTY_NOTICES.md を実行ファイルの横に入れる（無ければ止める）。
+After PyInstaller (`ts_smartcut.spec`), it makes an installer on Windows and a tar.gz on Linux, each with a SHA-256
+`.sha256`. The version is `__version__` in `ts_smartcut/__init__.py`. README.md, README_jp.md, LICENSE and
+THIRD_PARTY_NOTICES.md are placed next to the executable (it stops if one is missing).
 
 ```powershell
-# PySide6・pyinstaller・ts_smartcut_native を入れた仮想環境で
-python build_release.py            # Windows: dist\TS_SmartCut-<版>-setup.exe、Linux: dist/TS_SmartCut-<版>-linux64.tar.gz
-python build_release.py --no-installer   # Windows: dist\TS_SmartCut まで
+# In a virtual environment with PySide6, pyinstaller and ts_smartcut_native
+python build_release.py            # Windows: dist\TS_SmartCut-<version>-setup.exe, Linux: dist/TS_SmartCut-<version>-linux64.tar.gz
+python build_release.py --no-installer   # Windows: stops after dist\TS_SmartCut
 ```
 
-- 作る仮想環境には、テストした版の PySide6 を**最初から**入れる（`pip install "PySide6==<版>"`）。新しい版を入れた後で
-  古い版に入れ替えると、部品が欠けて `DLL load failed while importing QtGui` で起動しない .exe ができた（2026-11-15）。
-- **Windows**（`packaging/windows/TS_SmartCut.iss`、Inno Setup 6。ISCC.exe は `TS_SMARTCUT_ISCC`、
-  `%LOCALAPPDATA%\Programs\Inno Setup 6`、`%ProgramFiles(x86)%\Inno Setup 6` の順に探す）
-  - 利用者ごとに `%LOCALAPPDATA%\Programs\TS_SmartCut` へ入れる（管理者の権限は要らない）。設定・記録 DB・ログを
-    実行ファイルの横に書くので、Program Files には入れない（書き込めず E505 で起動しない）。
-  - 更新は、プログラムの部品（`_internal` は丸ごと入れ替え）だけを置き換え、設定・記録 DB・ログ・`Logo\` などは残す。
-  - 削除は、設定・記録・ログ・キャッシュ・`Logo\` も消すかを尋ねる（既定は残す。黙って削除する時は残す）。
-  - 最後に、ffmpeg・ffprobe・libmpv が PATH に無ければ知らせる。画面は日本語と英語。
-  - 確かめたこと（2026-11-15、Windows 11）: 黙って入れる → 起動して mpv につながる → 同じ版で更新（設定と記録 DB は
-    残り、古い版だけの部品は消える）→ 黙って削除（プログラム・スタートメニュー・アプリの一覧から消え、設定と記録は残る）。
-    インストーラーは 27.3 MB、入れたフォルダは 94 MB。
-- **Linux**（`packaging/linux/`）: tar.gz に `app/`（PyInstaller の出力）・`share/ts_smartcut.desktop`・`install.sh`・
-  `uninstall.sh` を入れる（持ち主の名前は入れない）。
-  - `sh install.sh`（root は要らない）で `${XDG_DATA_HOME:-~/.local/share}/TS_SmartCut` へ入れ、
-    `~/.local/share/applications/ts_smartcut.desktop` を置く。更新は同じコマンドで、`_internal` と実行ファイルだけを
-    入れ替える。最後に ffmpeg・ffprobe・libmpv（`ldconfig -p`）が無ければ知らせる。
-  - `sh ~/.local/share/TS_SmartCut/uninstall.sh` で削除（設定と記録も消すかを尋ねる。`--purge` で尋ねずに消す。残した時は uninstall.sh も残り、後から `--purge` で消せる）。
-  - 作る PC の部品を入れない（2026-11-15、Linux の確かめで見つかった）:
-    - libmpv: `libmpv.py` は名前を `find_library()` の呼び出しに直接書かない（直接書くと PyInstaller が作る PC の libmpv と、
-      その部品の ffmpeg・x264・x265・GTK などを丸ごと入れた。tar.gz が 146.9 MB）。spec は libmpv が入ると止める。
-    - Qt の使わない部品は、Linux の場所（`PySide6/Qt/lib`・`plugins`・`translations`）でも外す。VNC の画面・TUIO のタッチの部品
-      （Qt Network が要る）も外す。入力の部品は仮想キーボードだけ外す（ibus・compose は日本語の入力に要る）。
-    - 部品を外すのは解析の後なので、外した部品だけが使っていたライブラリ（OpenSSL・Kerberos など）が残る。spec は、
-      `_internal` の直下のライブラリのうち、残った部品から ldd の依存でたどれないものを外す（外した名前をビルドの出力に出す）。
-    - Qt の GTK3 の見た目の部品（`platformthemes/libqgtk3.so`）は、作る PC の GTK3・ICU（約 42 MB）を引き込むので同梱せず、
-      tar.gz の `optional/` に置く。`install.sh` は PC に GTK3（`libgtk-3.so.0`）がある時だけ入れ、PC の GTK3 を使う。
-      無くてもアプリは動く（見た目とファイルを開く画面が GTK に合わないだけ）。GNOME の PC での確かめはまだ。
-    - glib 一族（`libglib-2.0`・`libgobject-2.0`・`libgio-2.0`・`libgmodule-2.0`・`libgthread-2.0`）は同梱せず、いつも PC のものを
-      使う。PC の libmpv（ffmpeg を通して gio・pango など）と GTK3 の見た目の部品が PC の gobject・gio を読み込むので、
-      作った PC の glib を入れると版の違う glib と混ざる。
-    - 同じ理由で、`libstdc++`・`libgcc_s`・`libfontconfig`・`libfreetype`・`libpcre2-8`・`libffi`・`libz`・`libexpat`・`libpng16` も
-      同梱しない（`_SYSTEM_LIBRARIES`）。PyInstaller の実行ファイルは `_internal` を先に探すので、同梱した 24.04 の古い版が PC の
-      新しい部品より先に読み込まれ、Arch では libmpv（PC の libopenal が新しい libstdc++ を求める）と GTK3 の見た目（PC の
-      pango が新しい fontconfig を求める）が読めなかった（2026-11-15）。
-    - 子のプロセス（ffmpeg・ffprobe、「フォルダを開く」のファイルマネージャーなど）には `_internal` を探させない: PyInstaller が
-      書き換えた `LD_LIBRARY_PATH` を、`main()` の最初に `LD_LIBRARY_PATH_ORIG`（起動の前の値）に戻す
-      （`child_processes.restore_library_path_for_children`。実行中のアプリ自身の探し場所は起動の時に決まるので変わらない）。
-      戻す前は、Arch で ffmpeg の試しのエンコードが同梱の古い libstdc++ で失敗し、ハードウェアエンコーダーが「無し」になった。
-    - 同じく、PyInstaller の起動部の値（`_PYI_*`）は起動の最初に消し、PySide6 の起動時フックが足す `QT_PLUGIN_PATH`・
-      `QML2_IMPORT_PATH` は `QApplication` を作った後に消す（`forget_bundled_qt_paths`。消す前に `QCoreApplication.setLibraryPaths`
-      でアプリ自身の探し場所を固定する）。消す前は、「フォルダを開く」で起動した Arch の Dolphin（PC の Qt 6.12）が同梱の
-      Qt 6.11 の部品（Wayland の部品など）を読み込んでいた。Windows の .exe も同じ（`_PYI_*`・Qt の値）。
-    - メニューの項目は `ts_smartcut.desktop`。アプリが `setDesktopFileName("ts_smartcut")` で名乗る名前と同じにしないと、
-      KDE の Wayland でタスクバーのアイコンが汎用のものになる。
-  - **Linux の配布物は Ubuntu 24.04（WSL）で作る**（2026-11-15 決定）。PyInstaller の配布物は、作った PC の glibc 以降でしか
-    動かない。新しいディストリビューション（Arch など）で作ると、古いディストリビューションでは起動しない。24.04 で作って
-    「glibc 2.39 以降」とし（README の「必要なもの」）、最後の動きの確かめは新しい PC（Arch）で行う。
-    - 作り方: WSL に Ubuntu 24.04 を入れ（`wsl --install -d Ubuntu-24.04 --location <D ドライブなど> --no-launch`。作る作業は
-      root でよい）、apt で build-essential・ffmpeg・libmpv2・Qt が使う X / Wayland の部品・libgtk-3-0t64 を入れ、rustup と
-      uv（Python 3.14 を `uv python install 3.14`）を入れて、`uv venv` に `PySide6==6.11.2`・pyinstaller・`./native` を入れて
-      `build_release.py`。`install.sh` は root を断るので、確かめは一般の利用者で行う。
-    - `.sh`・`.desktop` は `.gitattributes` で常に LF にする。Windows の作業フォルダ（CRLF で取り出す）から写して作った時、
-      `install.sh` が `set: Illegal option -` で動かなかった。
-    - 確かめたこと（2026-11-15、Ubuntu 24.04 の WSLg）: tar.gz 54.1 MB（165 件、展開 146 MB）、必要な glibc は 2.38 まで、
-      `_internal` の部品に足りないものは無い。入れる（「GTK3 found」で GTK3 の見た目の部品が入る）→ 起動して PC の libmpv
-      （0.37、API 2.2）で mpv につながる → GTK3 の見た目の部品が PC の GTK3・glib で読み込める → 更新（設定と記録は残り、
-      古い版だけの部品は消える）→ 削除（「N」で設定・記録と uninstall.sh が残り、`--purge` で全部消える）。ibus での日本語の
-      入力は確かめていない。
+- Install the tested PySide6 version in the build's virtual environment **from the start**
+  (`pip install "PySide6==<version>"`). Replacing a newer version with an older one left parts missing and made an .exe
+  that didn't start (`DLL load failed while importing QtGui`, 2026-11-15).
+- **Windows** (`packaging/windows/TS_SmartCut.iss`, Inno Setup 6. ISCC.exe is looked for in `TS_SMARTCUT_ISCC`,
+  `%LOCALAPPDATA%\Programs\Inno Setup 6` and `%ProgramFiles(x86)%\Inno Setup 6`, in that order)
+  - Installs per user into `%LOCALAPPDATA%\Programs\TS_SmartCut` (no administrator rights needed). Settings, the history
+    DB and logs are written next to the executable, so it doesn't install into Program Files (not writable; E505 stops
+    the start).
+  - An update replaces only the program parts (`_internal` as a whole) and keeps settings, the history DB, logs, `Logo\`
+    and so on.
+  - Uninstalling asks whether to also delete settings, history, logs, caches and `Logo\` (kept by default; a silent
+    uninstall keeps them).
+  - At the end it warns if ffmpeg, ffprobe or libmpv is not on PATH. The screens are in Japanese and English.
+  - Checked (2026-11-15, Windows 11): silent install → starts and connects to mpv → update with the same version
+    (settings and history DB kept, parts only in the old version removed) → silent uninstall (removed from the program
+    folder, the Start menu and the app list; settings and history kept). The installer was 27.3 MB, the installed folder
+    94 MB.
+- **Linux** (`packaging/linux/`): the tar.gz holds `app/` (the PyInstaller output), `share/ts_smartcut.desktop`,
+  `install.sh` and `uninstall.sh` (no owner names inside).
+  - `sh install.sh` (no root needed) installs into `${XDG_DATA_HOME:-~/.local/share}/TS_SmartCut` and places
+    `~/.local/share/applications/ts_smartcut.desktop`. Updating is the same command and replaces only `_internal` and the
+    executable. At the end it warns if ffmpeg, ffprobe or libmpv (`ldconfig -p`) is missing.
+  - `sh ~/.local/share/TS_SmartCut/uninstall.sh` uninstalls (asks whether to delete settings and history too; `--purge`
+    deletes them without asking; when they are kept, uninstall.sh stays as well and `--purge` can delete them later).
+  - Leave out the build PC's own parts (2026-11-15, found while checking on Linux):
+    - libmpv: `libmpv.py` doesn't write the name directly in a `find_library()` call (written directly, PyInstaller
+      bundled the build PC's libmpv with its ffmpeg, x264, x265, GTK and more; the tar.gz was 146.9 MB). The spec stops
+      if libmpv gets in.
+    - Unused Qt parts are left out in the Linux locations too (`PySide6/Qt/lib`, `plugins`, `translations`), and so are
+      the VNC platform and the TUIO touch part (they need Qt Network). Of the input parts only the virtual keyboard is
+      left out (ibus and compose are needed for Japanese input).
+    - Parts are left out after the analysis, so libraries used only by the removed parts (OpenSSL, Kerberos, etc.)
+      remain. The spec removes the libraries directly in `_internal` that the remaining parts don't reach through ldd
+      dependencies (the removed names are printed in the build output).
+    - Qt's GTK3 theme part (`platformthemes/libqgtk3.so`) pulls in the build PC's GTK3 and ICU (about 42 MB), so it is
+      not bundled but placed in the tar.gz's `optional/`. `install.sh` installs it only when the PC has GTK3
+      (`libgtk-3.so.0`), and it uses the PC's GTK3. The app works without it (only the look and the file dialog don't
+      match GTK). Not checked on a GNOME PC yet.
+    - The glib family (`libglib-2.0`, `libgobject-2.0`, `libgio-2.0`, `libgmodule-2.0`, `libgthread-2.0`) is not bundled;
+      the PC's is always used. The PC's libmpv (gio, pango and so on through ffmpeg) and the GTK3 theme part load the PC's
+      gobject and gio, so a bundled glib from the build PC would mix with a glib of another version.
+    - For the same reason `libstdc++`, `libgcc_s`, `libfontconfig`, `libfreetype`, `libpcre2-8`, `libffi`, `libz`,
+      `libexpat` and `libpng16` are not bundled (`_SYSTEM_LIBRARIES`). The PyInstaller executable looks in `_internal`
+      first, so bundled older 24.04 versions were loaded before the PC's newer ones, and on Arch libmpv (the PC's
+      libopenal needs a newer libstdc++) and the GTK3 theme (the PC's pango needs a newer fontconfig) couldn't load
+      (2026-11-15).
+    - Child processes (ffmpeg, ffprobe, the file manager of "Open Folder", etc.) don't search `_internal`: at the start of
+      `main()` the `LD_LIBRARY_PATH` rewritten by PyInstaller is set back to `LD_LIBRARY_PATH_ORIG` (the value before the
+      start) (`child_processes.restore_library_path_for_children`; the running app's own search path is fixed at start,
+      so it doesn't change). Before that, on Arch ffmpeg's test encode failed with the bundled old libstdc++ and the
+      hardware encoders came out as "none".
+    - Likewise, PyInstaller's bootloader values (`_PYI_*`) are removed at the very start, and `QT_PLUGIN_PATH` and
+      `QML2_IMPORT_PATH`, added by PySide6's runtime hook, are removed after the `QApplication` is created
+      (`forget_bundled_qt_paths`; before removing them, `QCoreApplication.setLibraryPaths` fixes the app's own search
+      path). Before that, Arch's Dolphin started by "Open Folder" (the PC's Qt 6.12) loaded the bundled Qt 6.11 parts
+      (such as the Wayland part). The Windows .exe does the same (`_PYI_*`, the Qt values).
+    - The menu entry is `ts_smartcut.desktop`. It must match the name the app gives with
+      `setDesktopFileName("ts_smartcut")`, or the KDE Wayland taskbar shows a generic icon.
+  - **The Linux release is built on Ubuntu 24.04 (WSL)** (decided 2026-11-15). A PyInstaller release only runs on the
+    build PC's glibc or later. Built on a newer distribution (Arch, for example), it doesn't start on older ones. It is
+    built on 24.04 and stated as "glibc 2.39 or later" (the README's requirements); the last run check is on a newer PC
+    (Arch).
+    - How: install Ubuntu 24.04 in WSL (`wsl --install -d Ubuntu-24.04 --location <a D drive folder, etc.> --no-launch`;
+      the build can run as root), install build-essential, ffmpeg, libmpv2, the X / Wayland parts Qt uses and
+      libgtk-3-0t64 with apt, install rustup and uv (Python 3.14 with `uv python install 3.14`), put `PySide6==6.11.2`,
+      pyinstaller and `./native` into a `uv venv`, and run `build_release.py`. `install.sh` refuses root, so check it as
+      an ordinary user.
+    - `.sh` and `.desktop` files are always LF (`.gitattributes`). Built from a copy of a Windows working folder (checked
+      out with CRLF), `install.sh` failed with `set: Illegal option -`.
+    - Checked (2026-11-15, WSLg on Ubuntu 24.04): tar.gz 54.1 MB (165 entries, 146 MB unpacked), the highest glibc
+      needed is 2.38, nothing missing for the parts in `_internal`. Install ("GTK3 found" installs the GTK3 theme part) →
+      starts and connects to mpv with the PC's libmpv (0.37, API 2.2) → the GTK3 theme part loads with the PC's GTK3 and
+      glib → update (settings and history kept, parts only in the old version removed) → uninstall ("N" keeps settings,
+      history and uninstall.sh; `--purge` removes everything). Japanese input with ibus was not checked.
